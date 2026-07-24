@@ -52,23 +52,24 @@ public final class NumenLlmClient {
     /** Suffix appended to base URLs that don't already end with it. */
     private static final String CHAT_COMPLETIONS_SUFFIX = "/chat/completions";
 
-    private static volatile NumenLlmClient instance;
-
     private final HttpLlmTransport transport;
     private final LlmProvider provider;
     private final String fullUrl;
     private final String apiKey;
     private final String model;
+    /** Reasoning effort: {@code auto} (send nothing) | {@code low} | {@code medium} | {@code high}. */
+    private final String reasoningEffort;
 
-    private NumenLlmClient(INumenConfig config) {
-        this.provider = pickProvider(config.getProvider());
-        String siteBase = com.dwinovo.numen.agent.model.ModelRegistry.baseUrl(config.getProvider());
-        this.fullUrl = composeUrl(config.getBaseUrl(), siteBase, provider);
-        this.apiKey = config.getApiKey();
-        this.transport = new HttpLlmTransport(config.getProxy(),
-                com.dwinovo.numen.agent.model.ModelRegistry.headers(config.getProvider()));
-        String configured = config.getModel();
+    private NumenLlmClient(LlmEndpoint endpoint) {
+        this.provider = pickProvider(endpoint.provider());
+        String siteBase = com.dwinovo.numen.agent.model.ModelRegistry.baseUrl(endpoint.provider());
+        this.fullUrl = composeUrl(endpoint.baseUrl(), siteBase, provider);
+        this.apiKey = endpoint.apiKey();
+        this.transport = new HttpLlmTransport(endpoint.proxy(),
+                com.dwinovo.numen.agent.model.ModelRegistry.headers(endpoint.provider()));
+        String configured = endpoint.model();
         this.model = (configured == null || configured.isBlank()) ? "gpt-5.4-mini" : configured;
+        this.reasoningEffort = normalizeReasoning(endpoint.reasoningEffort());
         Constants.LOG.info("[numen-llm] client initialised: provider={}, model={}, url={}, streaming={}",
                 provider.name(), model, fullUrl, provider.supportsStreaming());
     }
@@ -88,15 +89,28 @@ public final class NumenLlmClient {
         return base + CHAT_COMPLETIONS_SUFFIX;
     }
 
+    /**
+     * One immutable client per distinct endpoint, keyed by VALUE — same connection
+     * parameters reuse the same client (and its HTTP pool); different companions
+     * pointing at different providers each get their own. Bounded by the number of
+     * distinct endpoints a player configures (a handful).
+     */
+    private static final java.util.concurrent.ConcurrentHashMap<LlmEndpoint, NumenLlmClient> CLIENTS =
+            new java.util.concurrent.ConcurrentHashMap<>();
+
+    /** The client for an explicit endpoint (a companion's selected provider entry). */
+    public static NumenLlmClient forEndpoint(LlmEndpoint endpoint) {
+        return CLIENTS.computeIfAbsent(endpoint, NumenLlmClient::new);
+    }
+
+    /**
+     * The client for the CURRENT global settings — resolved fresh on every call, so
+     * a settings change simply resolves to a new endpoint (and thus a new cached
+     * client) on the next request. No invalidation ceremony required; {@link #reset()}
+     * survives only as a cache trim for the GUI's existing call site.
+     */
     public static NumenLlmClient instance() {
-        NumenLlmClient local = instance;
-        if (local != null) return local;
-        synchronized (NumenLlmClient.class) {
-            if (instance == null) {
-                instance = new NumenLlmClient(Services.CONFIG);
-            }
-            return instance;
-        }
+        return forEndpoint(LlmEndpoint.fromGlobal(Services.CONFIG));
     }
 
     public static boolean isConfigured() {
@@ -116,12 +130,9 @@ public final class NumenLlmClient {
      * conversations continue with the new backend.
      */
     public static void reset() {
-        synchronized (NumenLlmClient.class) {
-            if (instance != null) {
-                Constants.LOG.info("[numen-llm] resetting client (next call will rebuild from current config)");
-            }
-            instance = null;
-        }
+        Constants.LOG.info("[numen-llm] clearing {} cached client(s) (next calls rebuild from current config)",
+                CLIENTS.size());
+        CLIENTS.clear();
     }
 
     /**
@@ -130,7 +141,8 @@ public final class NumenLlmClient {
      * agent loop's auto-compaction triggers on (no client-side token estimation
      * needed). Zero when the backend sent no usage frame.
      */
-    public record ChatResult(AssistantTurn turn, int promptTokens, int totalTokens) {}
+    public record ChatResult(AssistantTurn turn, int promptTokens, int totalTokens,
+                             long freshTokens) {}
 
     /**
      * Streaming chat completion. Returns a future of the final
@@ -160,6 +172,12 @@ public final class NumenLlmClient {
         JsonArray toolList = provider.buildToolList(tools);
         JsonObject body = provider.buildRequestBody(model, systemPrompt, wire, toolList);
 
+        // -- 1b. Reasoning / deep-thinking: only when the user opted in (never on "auto"), so a
+        //        non-reasoning model is never handed an unexpected parameter it would 400 on.
+        if (!"auto".equals(reasoningEffort)) {
+            provider.applyReasoning(body, reasoningEffort);
+        }
+
         // -- 2. Enable streaming + usage reporting (both server-side flags).
         body.addProperty("stream", true);
         JsonObject streamOpts = new JsonObject();
@@ -187,7 +205,8 @@ public final class NumenLlmClient {
             logCallSummary(t0, acc, turn);
             return new ChatResult(turn,
                     jsonInt(acc.usage, "prompt_tokens"),
-                    jsonInt(acc.usage, "total_tokens"));
+                    jsonInt(acc.usage, "total_tokens"),
+                    provider.freshTokens(acc.usage));   // 新处理量:缓存命中不计
         });
     }
 
@@ -215,6 +234,15 @@ public final class NumenLlmClient {
     }
 
     private static boolean nonBlank(String s) { return s != null && !s.isBlank(); }
+
+    /** Coerce a stored reasoning value to auto/low/medium/high ("auto" = don't send the parameter). */
+    private static String normalizeReasoning(String v) {
+        if (v == null) return "auto";
+        return switch (v.trim().toLowerCase()) {
+            case "low", "medium", "high" -> v.trim().toLowerCase();
+            default -> "auto";
+        };
+    }
 
     private static int jsonInt(JsonObject o, String key) {
         if (o == null || !o.has(key) || o.get(key).isJsonNull()) return 0;

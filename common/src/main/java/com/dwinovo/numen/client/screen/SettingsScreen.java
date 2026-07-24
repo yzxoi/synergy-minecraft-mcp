@@ -70,7 +70,7 @@ public final class SettingsScreen extends Screen {
         addRenderableWidget(new SimpleButton(rightX - btnW - 4, footerY, btnW, 18,
                 Component.translatable(ModLanguageData.Keys.GUI_SETTINGS_CANCEL), b -> onClose()));
         addRenderableWidget(new SimpleButton(rightX, footerY, btnW, 18,
-                Component.translatable(ModLanguageData.Keys.GUI_SETTINGS_SAVE), b -> onSave()));
+                Component.translatable(ModLanguageData.Keys.GUI_SETTINGS_SAVE), b -> onSave()).primary());
     }
 
     private EditBox field(int x, int y, int max, String value) {
@@ -97,17 +97,17 @@ public final class SettingsScreen extends Screen {
         g.drawString(font, Component.translatable(ModLanguageData.Keys.GUI_SETTINGS_BASE_URL), left, y + FIELD_GAP * 3, TXT_MUTED);
 
         if (savedFlashUntil > System.currentTimeMillis()) {
-            g.drawString(font, Component.literal("✔ saved"), left, top + CONTENT_HEIGHT - 14, OK);
+            g.drawString(font, Component.translatable("numen.settings.saved"), left, top + CONTENT_HEIGHT - 14, OK);
         }
         provider.render(g, font, mouseX, mouseY);   // last → open list overlays the fields
     }
 
     @Override
-    public boolean mouseClicked(net.minecraft.client.input.MouseButtonEvent event, boolean dbl) {
+    public boolean mouseClicked(net.minecraft.client.input.MouseButtonEvent event, boolean doubleClick) {
         if (event.button() == 0 && provider != null && provider.mouseClicked(event.x(), event.y())) {
             return true;
         }
-        return super.mouseClicked(event, dbl);
+        return super.mouseClicked(event, doubleClick);
     }
 
     private void onSave() {

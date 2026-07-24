@@ -5,9 +5,7 @@ import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ClientInformation;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.network.CommonListenerCookie;
-import net.minecraft.util.ProblemReporter;
 import net.minecraft.world.level.GameType;
-import net.minecraft.world.level.storage.TagValueInput;
 import net.minecraft.world.phys.Vec3;
 
 import java.util.Set;
@@ -22,7 +20,7 @@ import java.util.UUID;
  * to the player list (→ chunk loading for free) and to the level, but does NOT
  * load a hand-built fake player's {@code .dat} (that path is tied to the real
  * login flow) — so {@link #spawn} restores position / inventory / owner from disk
- * explicitly afterwards, the way Carpet's {@code EntityPlayerMPFake} does.
+ * explicitly afterwards.
  * {@link net.minecraft.server.players.PlayerList#remove} saves that data back and
  * removes the body — so despawn is a clean, persisted dormancy.
  */
@@ -38,15 +36,32 @@ public final class CompanionFactory {
      */
     public static NumenPlayer spawn(MinecraftServer server, UUID companionUuid, String name,
                                      UUID ownerUuid, ServerLevel level, Vec3 pos) {
-        GameProfile profile = new GameProfile(companionUuid, name);
+        // 借来的正版皮肤(Mojang 签名的 textures,注册表持久化)注入档案——客户端只认
+        // 签过名的皮肤数据;没有则回落原版默认皮肤(按 UUID 哈希抽取)。
+        // authlib 9(1.21.9+)把 GameProfile 变成不可变 record,属性只能在构造时给全。
+        CompanionRegistry.Entry reg = CompanionRegistry.get(server).find(companionUuid);
+        GameProfile profile;
+        if (reg != null && !reg.skinValue().isEmpty()) {
+            com.google.common.collect.Multimap<String, com.mojang.authlib.properties.Property> props =
+                    com.google.common.collect.LinkedHashMultimap.create();
+            props.put("textures", new com.mojang.authlib.properties.Property(
+                    "textures", reg.skinValue(), reg.skinSig().isEmpty() ? null : reg.skinSig()));
+            profile = new GameProfile(companionUuid, name,
+                    new com.mojang.authlib.properties.PropertyMap(props));
+        } else {
+            profile = new GameProfile(companionUuid, name);
+        }
         NumenPlayer player = new NumenPlayer(server, level, profile, ClientInformation.createDefault());
         FakeConnection connection = new FakeConnection();
         server.getPlayerList().placeNewPlayer(connection, player,
                 CommonListenerCookie.createInitial(profile, false));
         // placeNewPlayer does NOT load a hand-built fake player's .dat, so restore
-        // it ourselves (Carpet's model): position, inventory, health, owner from
+        // it ourselves: position, inventory, health, owner from
         // disk. Without this a respawned companion spawns at 0,0,0 with no items.
         loadPlayerData(server, player);
+        // 假玩家没有客户端上报的模型定制:点亮全部皮肤覆盖层与披风,否则只显示单层基础皮肤。
+        // 每次 spawn(首建与重生)都重设——该字节是同步实体数据、不随 .dat 存取。
+        player.showAllSkinLayers();
         // Companions are always survival, whatever the world's default game type — their whole design
         // (gather/drops, real combat, recoverable death) is survival-shaped, and placeNewPlayer would
         // otherwise hand a creative world's body instabuild (no block drops, breaks auto_mine). Forced
@@ -68,14 +83,15 @@ public final class CompanionFactory {
      * Restore a fake player's saved state from its playerdata {@code .dat}
      * ({@link net.minecraft.server.players.PlayerList#loadPlayerData} +
      * {@link net.minecraft.world.entity.Entity#load}). {@code placeNewPlayer}
-     * skips this for hand-constructed players, so we do it like Carpet's
-     * {@code loadPlayerData}. No-op on first summon (no file yet).
+     * skips this for hand-constructed players, so we invoke the same load
+     * ourselves. No-op on first summon (no file yet).
      */
     private static void loadPlayerData(MinecraftServer server, NumenPlayer player) {
-        // 1.21.10: load(player, reporter) is gone; loadPlayerData(nameAndId) returns the raw
-        // CompoundTag, which we wrap into a ValueInput via TagValueInput.create for Entity.load.
-        server.getPlayerList().loadPlayerData(player.nameAndId())
-                .map(tag -> TagValueInput.create(ProblemReporter.DISCARDING, player.registryAccess(), tag))
+        // 1.21.9+ 拆掉了 PlayerList.load(player, reporter):改为按 NameAndId 读回原始
+        // CompoundTag,再自己包一层 TagValueInput 喂给 player.load。
+        server.getPlayerList().loadPlayerData(new net.minecraft.server.players.NameAndId(player.getGameProfile()))
+                .map(tag -> net.minecraft.world.level.storage.TagValueInput.create(
+                        net.minecraft.util.ProblemReporter.DISCARDING, player.registryAccess(), tag))
                 .ifPresent(player::load);
     }
 

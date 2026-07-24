@@ -92,6 +92,44 @@ public interface LlmProvider {
     /** Decode the response body into our internal {@link AssistantTurn}. */
     AssistantTurn parseResponseBody(JsonObject body);
 
+    /**
+     * Apply the user's reasoning / "deep thinking" preference to an already-built
+     * request body. Only called when the user picked a concrete effort — the
+     * client skips this call for the {@code "auto"} default, so a body is never
+     * touched unless the user opted in (protecting non-reasoning models that
+     * would 400 on an unexpected parameter).
+     *
+     * <p>Default maps to the OpenAI-dialect {@code reasoning_effort} field
+     * ({@code low}/{@code medium}/{@code high}), which OpenAI's o-series / GPT-5
+     * and a growing set of OpenAI-compatible backends honour. Providers whose
+     * backend uses a different knob (e.g. a {@code thinking} / {@code enable_thinking}
+     * object) can override this to translate.
+     *
+     * @param body   the request body to mutate in place
+     * @param effort one of {@code "low"}, {@code "medium"}, {@code "high"}
+     */
+    default void applyReasoning(JsonObject body, String effort) {
+        body.addProperty("reasoning_effort", effort);
+    }
+
+    // ---- usage accounting ----
+
+    /**
+     * 本次请求真正新处理的 token:缓存命中的输入不计,只算未命中的输入加输出。
+     * 缓存正常工作时这个数很小,暴涨说明缓存前缀碎了。缓存字段是各家方言,
+     * 由实现自理;默认全量 total——没有缓存机制(或方言未知)的服务商,所有
+     * 输入都算新处理。
+     */
+    default long freshTokens(JsonObject usage) {
+        return usageInt(usage, "total_tokens");
+    }
+
+    /** usage 帧安全取整(帧缺失/字段缺失 → 0)。 */
+    static int usageInt(JsonObject usage, String key) {
+        return usage != null && usage.has(key) && usage.get(key).isJsonPrimitive()
+                ? usage.get(key).getAsInt() : 0;
+    }
+
     // ---- streaming ----
 
     /**

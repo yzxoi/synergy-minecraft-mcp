@@ -2,6 +2,7 @@ package com.dwinovo.numen.client.screen;
 
 import com.dwinovo.numen.agent.llm.NumenLlmClient;
 import com.dwinovo.numen.agent.model.ModelRegistry;
+import com.dwinovo.numen.agent.llm.ConvoLog;
 import com.dwinovo.numen.agent.llm.ConvoState;
 import com.dwinovo.numen.agent.provider.AssistantTurn;
 import com.dwinovo.numen.agent.provider.LlmToolCall;
@@ -11,15 +12,16 @@ import com.dwinovo.numen.client.agent.ClientNumenLookup;
 import com.dwinovo.numen.client.agent.EntityAgentLoop;
 import com.dwinovo.numen.client.agent.NumenRoster;
 import com.dwinovo.numen.client.data.ClientNumenInventory;
+import com.dwinovo.numen.data.ModLanguageData;
 import com.dwinovo.numen.network.payload.RequestInventoryPayload;
+import com.dwinovo.numen.persona.PersonaLibrary;
 import com.dwinovo.numen.platform.Services;
 import com.dwinovo.numen.platform.services.INumenConfig;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import net.minecraft.client.Minecraft;
-import net.minecraft.client.input.KeyEvent;
-import net.minecraft.client.input.MouseButtonEvent;
+import net.minecraft.client.resources.language.I18n;
 import net.minecraft.client.gui.Font;
 import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.gui.components.AbstractWidget;
@@ -56,8 +58,12 @@ public final class NumenScreen extends Screen {
     private enum Tab { CHAT, ITEMS, SETTINGS }
 
     // ---- layout ----
-    private static final int PANEL_W = 380;
-    private static final int PANEL_H = 232;
+    // 面板随窗口伸缩:下限=从前的固定尺寸(小窗口下与历史布局完全一致),
+    // 上限挡住大屏上的无限变宽——行宽超过阅读舒适区就不再跟了。
+    private static final int PANEL_MIN_W = 380;
+    private static final int PANEL_MIN_H = 232;
+    private static final int PANEL_MAX_W = 520;
+    private static final int PANEL_MAX_H = 300;
     // Left companion rail (folded-in roster): one avatar per Numen, click to switch, + to summon.
     private static final int RAIL_W = 46;        // left rail column width (baked into the workspace sprite)
     private static final int RAIL_AV = 26;       // avatar tile size
@@ -66,8 +72,8 @@ public final class NumenScreen extends Screen {
     private static final int RAIL_BOT_GAP = 6;   // gap kept above the pinned "+" tile
     private static final int HEADER_H = 22;
     private static final int INPUT_H = 18;
-    /** Text fields are inset inside their parchment frame: the EditBox is shrunk by this much
-     *  (so vanilla's top-left unbordered text lands padded + centred) and the FIELD_SPRITE is
+    /** Text fields are inset inside their rounded card: the EditBox is shrunk by this much
+     *  (so vanilla's top-left unbordered text lands padded + centred) and the card is
      *  inflated back out to the full frame. */
     private static final int FIELD_INSET_X = 5;
     private static final int FIELD_INSET_Y = 4;
@@ -75,53 +81,67 @@ public final class NumenScreen extends Screen {
     private static final int LINE_H = 10;
     private static final int PLAN_W = 122;
     private static final int MAX_PROMPT = 1024;
-    private static final int TOOL_ARG_CHARS = 44;
 
-    // ---- palette (BlockFrame "Cottage" theme — single theme for now, see UiTheme) ----
-    private static final UiTheme TH = UiTheme.WARM;
-    private static final int BORDER = TH.border();
-    private static final int ACCENT = TH.cta();
-    private static final int TXT = TH.text();
-    private static final int TXT_MUTED = TH.textDim();
-    private static final int TXT_FAINT = 0xFF8C7C62;
-    private static final int ON_BAND = TH.onBand();
-    private static final int CTA = TH.cta();
-    private static final int ON_CTA = TH.onCta();
-    private static final int FIELD = TH.field();
-    private static final int YOU = TH.reply();          // user messages — teal
-    private static final int AI = 0xFF35562F;            // assistant replies — deep moss green (the "point")
-    private static final int TOOL = TH.textDim();        // folded tool-call rows — muted, secondary
-    private static final int OK = TH.ok();
-    private static final int RUN = TH.run();
-    private static final int FAIL = TH.fail();
-    private static net.minecraft.resources.Identifier railSpr(String n) {
-        return net.minecraft.resources.Identifier.fromNamespaceAndPath(com.dwinovo.numen.Constants.MOD_ID, n);
+    // ---- palette: static but REFRESHABLE — the theme picker calls repaint() and every
+    // constant re-reads UiTheme.current() (single active theme, shared by all instances). ----
+    private static int BORDER, ACCENT, TXT, TXT_MUTED, TXT_FAINT, ON_BAND, ON_BAND_FAINT,
+            CTA, ON_CTA, FIELD, OK, RUN, FAIL;
+    static { repaint(); }
+
+    /** Re-read every palette constant from the current theme (called after a theme switch). */
+    static void repaint() {
+        UiTheme t = UiTheme.current();
+        BORDER = t.border();
+        ACCENT = t.cta();
+        TXT = t.text();
+        TXT_MUTED = t.textDim();
+        TXT_FAINT = t.faint();
+        ON_BAND = t.onBand();
+        ON_BAND_FAINT = t.onBandFaint();
+        CTA = t.cta();
+        ON_CTA = t.onCta();
+        FIELD = t.field();
+        OK = t.ok();
+        RUN = t.run();
+        FAIL = t.fail();
     }
-    /** rail + panel composited into ONE sprite (continuous header, no gap; panel's left border = divider). */
-    private static final net.minecraft.resources.Identifier WORKSPACE_SPRITE = railSpr("workspace");
-    private static final net.minecraft.resources.Identifier AVATAR_FRAME = railSpr("avatar_frame");
-    private static final net.minecraft.resources.Identifier AVATAR_FRAME_ACTIVE = railSpr("avatar_frame_active");
-    private static final net.minecraft.resources.Identifier SUMMON_SPRITE = railSpr("summon");
-    private static final net.minecraft.resources.Identifier SUMMON_ACTIVE = railSpr("summon_active");
-    /** API-key reveal toggle icons: open eye = "click to show", slashed eye = "click to hide". */
-    private static final net.minecraft.resources.Identifier EYE = railSpr("eye");
-    private static final net.minecraft.resources.Identifier EYE_OFF = railSpr("eye_off");
-    private static final net.minecraft.resources.Identifier CHEVRON_UP = railSpr("chevron_up");
-    private static final net.minecraft.resources.Identifier CHEVRON_DOWN = railSpr("chevron_down");
-
-    private static final String[] SPIN = {"|", "/", "-", "\\"};
-    /** Armor column on the Items tab (top → bottom); offhand is drawn separately below it. */
-    private static final EquipmentSlot[] ARMOR = {
-            EquipmentSlot.HEAD, EquipmentSlot.CHEST, EquipmentSlot.LEGS, EquipmentSlot.FEET};
+    private static net.minecraft.resources.ResourceLocation railSpr(String n) {
+        return net.minecraft.resources.ResourceLocation.fromNamespaceAndPath(com.dwinovo.numen.Constants.MOD_ID, n);
+    }
+    private static final net.minecraft.resources.ResourceLocation AVATAR_FRAME = railSpr("avatar_frame");
+    private static final net.minecraft.resources.ResourceLocation AVATAR_FRAME_ACTIVE = railSpr("avatar_frame_active");
+    private static final net.minecraft.resources.ResourceLocation SUMMON_SPRITE = railSpr("summon");
+    private static final net.minecraft.resources.ResourceLocation SUMMON_ACTIVE = railSpr("summon_active");
+    private static final net.minecraft.resources.ResourceLocation CHEVRON_UP = railSpr("chevron_up");
+    private static final net.minecraft.resources.ResourceLocation CHEVRON_DOWN = railSpr("chevron_down");
 
     private UUID uuid;       // active companion (mutable — the rail switches it in place)
     private String name;
     private Tab tab = Tab.CHAT;
 
+    private static final String VOICE_NONE = "__none__";
+
+    /** 召唤页的皮肤下拉:null = 默认(按名字找同名正版)。 */
+    private Dropdown summonSkinDropdown;
+    private String summonSkinId;
+    private static final String SKIN_DEFAULT = "__default__";
+
+    /** Persona chosen for the companion currently being summoned (null = default / none). */
+    private String summonPersonaId;
+    private Dropdown summonPersonaDropdown;
+    /** Provider entry for the new companion — REQUIRED (no default, no fallback). */
+    private Dropdown summonProviderDropdown;
+    private String summonProviderId;
+    /** Voice entry for the new companion — optional (null = silent). */
+    private Dropdown summonVoiceDropdown;
+    private String summonVoiceId;
+    private static final String PERSONA_DEFAULT = "__default__";
+
     private EditBox input;
     private SimpleButton sendButton;
     private SimpleButton stopButton;
     private SimpleButton compactButton;
+    private SimpleButton micButton;
     private String savedInput = "";
 
     // "+" summon flow: a transient name field shown over the panel
@@ -129,42 +149,57 @@ public final class NumenScreen extends Screen {
     private EditBox summonInput;
     private UUID dismissPending;   // non-null = showing the "delete companion?" confirm bar for this uuid
 
-    // settings tab widgets
-    private ProviderDropdown providerDropdown;
-    private Dropdown modelDropdown;          // null when in custom-model mode
-    private boolean customModel;             // model is a free-text custom id (not a registry preset)
-    private static final String CUSTOM_MODEL = "__custom__";
-    // unsaved working state — settings widgets are (re)built from these, NOT from config, so a rebuild
-    // (provider change / custom toggle) doesn't revert what you just picked or typed.
-    private String wProvider = "", wApiKey = "", wModel = "", wBaseUrl = "", wProxy = "", wSiteName = "";
-    private boolean addingSite;              // "+ 添加站点" mode: name + base URL + model → writes a site
-    private EditBox proxyInput;
-    private EditBox siteNameInput;
-    private EditBox apiKeyInput;
-    private EditBox modelInput;
-    private EditBox baseUrlInput;
-    private long savedFlashUntil;
+    /** The Settings tab, extracted whole (state + build + render + input) — see SettingsView. */
+    private final com.dwinovo.numen.client.screen.settings.SettingsView settings =
+            new com.dwinovo.numen.client.screen.settings.SettingsView(
+                    new com.dwinovo.numen.client.screen.settings.SettingsView.Host() {
+                        @Override public <T extends AbstractWidget> T add(T w) { return NumenScreen.this.add(w); }
+                        @Override public void rebuild() { NumenScreen.this.rebuild(); }
+                        @Override public void focus(AbstractWidget w) { setInitialFocus(w); }
+                        @Override public Font font() { return NumenScreen.this.font; }
+                        @Override public int left() { return left; }
+                        @Override public int top() { return top; }
+                        @Override public int panelW() { return panelW; }
+                        @Override public int panelH() { return panelH; }
+                        @Override public int railX() { return railX; }
+                        @Override public UUID uuid() { return uuid; }
+                        @Override public void warnPulse() { warnUntil = System.currentTimeMillis() + 4000; }
+                        @Override public void tip(List<Component> lines, int x, int y) {
+                            pendingTip = lines;
+                            pendingTipX = x;
+                            pendingTipY = y;
+                        }
+                        @Override public void repaintPalette() { repaint(); }
+                    });
+
+    private String micNotice;
+    private long micNoticeUntil;
     private long warnUntil;        // transient "no API key" hint on the chat tab
+    /** The current warn hint's text (endpoint problems vary: unbound provider vs keyless
+     *  entry); null falls back to the generic no-key translation. */
+    private String warnText;
+
+    // A hovered-row tooltip (MCP / skill list) collected during section render, drawn last so
+    // it sits above every later draw. Cleared each frame.
+    private List<Component> pendingTip;
+    private int pendingTipX, pendingTipY;
 
     // Widgets are registered for EVENTS only (addWidget) and rendered MANUALLY at the end of the
     // frame, so they sit ON TOP of the panel background instead of being painted over by it (the
     // "dim fields" bug — the panel fill ran after the auto-rendered widgets).
     private final List<AbstractWidget> overlay = new ArrayList<>();
-    /** API key is masked by default; the eye button toggles it. */
-    private boolean showKey;
 
     // geometry resolved in init()
     private int left, top, railX;
+    private int panelW = PANEL_MIN_W, panelH = PANEL_MIN_H;   // resolved in init() from the window size
     private final int[] tabX = new int[3];   // left x of each tab label, for click hit-testing
     private final int[] tabW = new int[3];
 
-    // chat transcript scroll
-    private int scroll;            // px scrolled down from the top of the content
-    private boolean pinBottom = true;
-    private int lastMaxScroll;
+    /** Chat transcript view (bubbles + tool chips + eased scroll); reset on companion/tab switch. */
+    private final com.dwinovo.numen.client.screen.chat.ChatView chatView =
+            new com.dwinovo.numen.client.screen.chat.ChatView(
+                    Minecraft.getInstance().font, this::loop, () -> name, () -> uuid);
     private int railScroll;        // index of the first visible rail avatar (wheel-scroll when many companions)
-    /** Completed tool-call groups the user clicked open (keyed by the group's first call id). */
-    private final Set<String> expandedGroups = new HashSet<>();
 
     /** Re-request the backpack every ~1 s while the Items tab is open. */
     private static final int INV_REFRESH_TICKS = 20;
@@ -194,7 +229,7 @@ public final class NumenScreen extends Screen {
         if (java.util.Objects.equals(u, uuid)) return;
         input = null; savedInput = "";          // don't carry typed text across companions
         uuid = u; name = n;
-        scroll = 0; pinBottom = true; expandedGroups.clear();
+        chatView.reset();
         rebuild();
         if (tab == Tab.ITEMS && u != null) requestInventory();
     }
@@ -205,17 +240,26 @@ public final class NumenScreen extends Screen {
 
     @Override
     protected void init() {
-        int composite = RAIL_W + PANEL_W;        // rail flush against the panel — one merged sprite
-        this.railX = (this.width - composite) / 2;
+        // 窗口留 12px 边距后能给多大给多大,夹在上下限之间;窗口比下限还小时
+        // railX/top 至少钳到 0,保证头部(标题/tab/关闭途径)永远可见可点。
+        panelW = Math.clamp(this.width - RAIL_W - 24, PANEL_MIN_W, PANEL_MAX_W);
+        panelH = Math.clamp(this.height - 24, PANEL_MIN_H, PANEL_MAX_H);
+        int composite = RAIL_W + panelW;        // rail flush against the panel — one merged sprite
+        this.railX = Math.max(0, (this.width - composite) / 2);
         this.left = railX + RAIL_W;
-        this.top = (this.height - PANEL_H) / 2;
+        this.top = Math.max(0, (this.height - panelH) / 2);
         layoutTabs();
         rebuild();
     }
 
+    private static String[] tabLabels() {
+        return new String[]{
+                I18n.get("numen.tab.chat"), I18n.get("numen.tab.status"), I18n.get("numen.tab.settings")};
+    }
+
     private void layoutTabs() {
-        String[] labels = {"Chat", "Items", "Settings"};
-        int x = left + PANEL_W - PAD;
+        String[] labels = tabLabels();
+        int x = left + panelW - PAD;
         for (int i = labels.length - 1; i >= 0; i--) {
             int w = font.width(labels[i]) + 10;
             x -= w;
@@ -231,40 +275,181 @@ public final class NumenScreen extends Screen {
         clearWidgets();
         overlay.clear();
         input = null;
-        sendButton = stopButton = compactButton = null;
-        apiKeyInput = modelInput = baseUrlInput = proxyInput = siteNameInput = null;
-        modelDropdown = null;
+        sendButton = stopButton = compactButton = micButton = null;
+        settings.clearWidgets();
         summonInput = null;
+        summonSkinDropdown = null;
+        summonPersonaDropdown = null;
+        summonProviderDropdown = null;
+        summonVoiceDropdown = null;
         if (summoning) { buildSummonField(); return; }
         if (dismissPending != null) { buildDismissConfirm(); return; }
         switch (tab) {
             case CHAT -> { if (uuid != null) buildChatWidgets(); }
-            case SETTINGS -> buildSettingsWidgets();
+            case SETTINGS -> settings.buildWidgets();
             case ITEMS -> { /* no widgets */ }
         }
     }
 
+    // ---- summon modal card: 居中卡 + 暗幕,当前 tab 内容照常渲染作背景 ----
+    private static final int SUMMON_CARD_H = 208;
+    private int sumCardW() { return Math.min(320, panelW - 24); }
+    private int sumCardX() { return left + (panelW - sumCardW()) / 2; }
+    private int sumCardY() { return top + Math.max(10, (panelH - SUMMON_CARD_H) / 2); }
+    private int sumCardBottom() { return sumCardY() + Math.min(SUMMON_CARD_H, panelH - 20); }
+    /** 卡内内容左缘 / 宽 / 行基准(行偏移沿用原布局表)。 */
+    private int sumX() { return sumCardX() + 10; }
+    private int sumW() { return sumCardW() - 20; }
+    private int sumY0() { return sumCardY() + 2; }
+
+    /** Row layout (offsets from sumY0()) — each control gets its own label row,
+     *  drawn in the render pass at these SAME offsets (keep the two in lockstep):
+     *  8 title · 24 名字 label · 34 name field · 58 人设 label · 68 persona dropdown ·
+     *  92 模型配置 label · 102 provider dropdown · 126 声线 label · 136 voice dropdown ·
+     *  162 buttons · 186 hint/warn. */
     private void buildSummonField() {
-        int y = top + HEADER_H + 24;
-        summonInput = new FlatEditBox(font, left + PAD + FIELD_INSET_X, y + FIELD_INSET_Y,
-                PANEL_W - PAD * 2 - FIELD_INSET_X * 2, 18 - FIELD_INSET_Y * 2, Component.literal(""));
+        // 人设下拉的数据源是 persona/ 目录:每次打开召唤面板重扫一遍。
+        com.dwinovo.numen.persona.PersonaLibrary.instance().reload();
+        int y0 = sumY0();
+        summonInput = new FlatEditBox(font, sumX() + FIELD_INSET_X, y0 + 34 + FIELD_INSET_Y,
+                sumW() - FIELD_INSET_X * 2, 18 - FIELD_INSET_Y * 2, Component.literal(""));
         summonInput.setMaxLength(com.dwinovo.numen.network.payload.SummonRequestPayload.MAX_NAME);
         summonInput.setBordered(false);
         summonInput.setTextColor(TXT);
-        summonInput.setHint(Component.literal("New companion name…"));
         add(summonInput);
+        // Persona is OPTIONAL: first item = 不配置 (the persona slot then tells the
+        // model "未配置人设,可以自由发挥"), presets and user personas follow. The name
+        // "hint" renders in the render pass as a FAINT placeholder — the EditBox's
+        // own hint drew in full text color and read as typed input.
+        List<Dropdown.Item> items = new ArrayList<>();
+        items.add(new Dropdown.Item(PERSONA_DEFAULT, I18n.get(ModLanguageData.Keys.SUMMON_PERSONA_NONE)));
+        for (PersonaLibrary.Persona p : PersonaLibrary.instance().list()) {
+            items.add(new Dropdown.Item(p.id(), p.name()));
+        }
+        summonPersonaDropdown = new Dropdown(items, summonPersonaId == null ? PERSONA_DEFAULT : summonPersonaId);
+        summonPersonaDropdown.setBounds(sumX(), y0 + 68, sumW(), 18);
+        summonPersonaDropdown.setDropBottom(top + panelH - 2);
+        // REQUIRED model config — no default item and no fallback: an empty library
+        // shows no dropdown; clicking 创建 then explains (doSummon).
+        var provEntries = com.dwinovo.numen.agent.llm.ProviderLibrary.instance().list();
+        if (!provEntries.isEmpty()) {
+            List<Dropdown.Item> provItems = new ArrayList<>();
+            for (var e : provEntries) {
+                provItems.add(new Dropdown.Item(e.id(), e.name()));
+            }
+            if (summonProviderId == null) summonProviderId = provEntries.get(0).id();
+            summonProviderDropdown = new Dropdown(provItems, summonProviderId);
+            summonProviderDropdown.setBounds(sumX(), y0 + 102, sumW(), 18);
+            summonProviderDropdown.setDropBottom(top + panelH - 2);
+        }
+        // OPTIONAL voice — first item = 无(静音), entries follow (same pattern as the
+        // persona pick above); an empty library shows no dropdown, just a hint.
+        var voiceEntries = com.dwinovo.numen.client.voice.VoiceLibrary.instance().list();
+        if (!voiceEntries.isEmpty()) {
+            List<Dropdown.Item> voiceItems = new ArrayList<>();
+            voiceItems.add(new Dropdown.Item(VOICE_NONE, I18n.get(ModLanguageData.Keys.VOICE_BIND_NONE)));
+            for (var e : voiceEntries) {
+                voiceItems.add(new Dropdown.Item(e.id(), e.name()));
+            }
+            summonVoiceDropdown = new Dropdown(voiceItems, summonVoiceId == null ? VOICE_NONE : summonVoiceId);
+            // 声线行与皮肤下拉平分一行(左声线右皮肤),不再新占一行。
+            summonVoiceDropdown.setBounds(sumX(), y0 + 136, summonHalfW(), 18);
+            summonVoiceDropdown.setDropBottom(top + panelH - 2);
+        }
+        // 皮肤:默认(按名字找同名正版) + 皮肤库里已签名的条目。
+        List<Dropdown.Item> skinItems = new ArrayList<>();
+        skinItems.add(new Dropdown.Item(SKIN_DEFAULT, I18n.get(ModLanguageData.Keys.SUMMON_SKIN_DEFAULT)));
+        for (var e : com.dwinovo.numen.client.skin.SkinLibrary.instance().list()) {
+            if (e.signed()) skinItems.add(new Dropdown.Item(e.id(), e.name()));
+        }
+        summonSkinDropdown = new Dropdown(skinItems, summonSkinId == null ? SKIN_DEFAULT : summonSkinId);
+        summonSkinDropdown.setBounds(sumX() + summonHalfW() + 6, y0 + 136, summonHalfW(), 18);
+        summonSkinDropdown.setDropBottom(top + panelH - 2);
+        // Explicit actions — Enter stays as the fallback confirm (keyPressed), the
+        // buttons are the primary path.
+        int bw = 64, gap = 8, totalW = bw * 2 + gap;
+        int bx = sumX() + (sumW() - totalW) / 2;
+        add(new SimpleButton(bx, y0 + 162, bw, 18, Component.translatable("numen.gui.settings.cancel"),
+                b -> { summoning = false; rebuild(); }));
+        add(new SimpleButton(bx + bw + gap, y0 + 162, bw, 18,
+                Component.translatable(ModLanguageData.Keys.SUMMON_CREATE),
+                b -> doSummon()).primary());
         setInitialFocus(summonInput);
     }
 
-    /** Two buttons for the "delete companion?" confirm bar — Cancel and the destructive Delete. */
+    /** 召唤卡"声线|皮肤"共享行的半宽。build 与 render 共用。 */
+    private int summonHalfW() {
+        return (sumW() - 6) / 2;
+    }
+
+    /**
+     * 召唤页四个下拉的点击路由:正展开的先吃(它的列表画在最上层,命中也必须
+     * 最优先),然后按行序。返回 true = 消费了本次点击。
+     */
+    private boolean routeSummonDropdownClick(double mx, double my) {
+        Dropdown[] all = {summonPersonaDropdown, summonProviderDropdown,
+                summonVoiceDropdown, summonSkinDropdown};
+        Dropdown open = null;
+        for (Dropdown d : all) {
+            if (d != null && d.isOpen()) { open = d; break; }
+        }
+        for (Dropdown d : (open != null ? new Dropdown[]{open} : all)) {
+            if (d == null || !d.mouseClicked(mx, my)) continue;
+            String sel = d.selectedId();
+            if (d == summonPersonaDropdown) {
+                summonPersonaId = PERSONA_DEFAULT.equals(sel) ? null : sel;
+            } else if (d == summonProviderDropdown) {
+                summonProviderId = sel;
+            } else if (d == summonVoiceDropdown) {
+                summonVoiceId = VOICE_NONE.equals(sel) ? null : sel;
+            } else {
+                summonSkinId = SKIN_DEFAULT.equals(sel) ? null : sel;
+            }
+            return true;
+        }
+        // 有列表展开时,点到列表外 = 收起并消费(mouseClicked 已处理);点到这里
+        // 说明没有任何下拉消费——放行给后面的命中。
+        return false;
+    }
+
+    /** 召唤页四个下拉的渲染:收起的先画,正展开的最后画(列表压在一切之上)。 */
+    private void renderSummonDropdowns(GuiGraphics g, int mouseX, int mouseY) {
+        Dropdown[] all = {summonSkinDropdown, summonVoiceDropdown,
+                summonProviderDropdown, summonPersonaDropdown};
+        Dropdown open = null;
+        for (Dropdown d : all) {
+            if (d == null) continue;
+            if (d.isOpen() && open == null) { open = d; continue; }
+            d.render(g, font, mouseX, mouseY);
+        }
+        if (open != null) {
+            open.render(g, font, mouseX, mouseY);
+        }
+    }
+
+    private Component dismissTitle() {
+        return Component.translatable("numen.dismiss.title", nameFor(dismissPending));
+    }
+
+    private Component dismissWarn() {
+        return Component.translatable("numen.dismiss.warning");
+    }
+
+    /** The "delete companion?" confirm — now a modal card; buttons positioned by the SAME
+     *  ConfirmModal box the render uses. Cancel left, destructive Delete right. */
     private void buildDismissConfirm() {
         UUID target = dismissPending;
-        int bw = 64, gap = 8, totalW = bw * 2 + gap;
-        int bx = left + (PANEL_W - totalW) / 2;
-        int by = top + HEADER_H + 52;
-        add(new SimpleButton(bx, by, bw, 18, Component.literal("取消"),
+        var box = com.dwinovo.numen.client.ui.ConfirmModal.box(
+                font, railX, railX + RAIL_W + panelW, top, panelH, dismissTitle(), dismissWarn());
+        int bw = com.dwinovo.numen.client.ui.ConfirmModal.BTN_W;
+        int gap = com.dwinovo.numen.client.ui.ConfirmModal.BTN_GAP;
+        int bx = box.x() + (box.w() - (bw * 2 + gap)) / 2;
+        int by = box.buttonY();
+        add(new SimpleButton(bx, by, bw, com.dwinovo.numen.client.ui.ConfirmModal.BTN_H,
+                Component.translatable("numen.gui.settings.cancel"),
                 b -> { dismissPending = null; rebuild(); }));
-        add(new SimpleButton(bx + bw + gap, by, bw, 18, Component.literal("删除"), b -> {
+        add(new SimpleButton(bx + bw + gap, by, bw, com.dwinovo.numen.client.ui.ConfirmModal.BTN_H,
+                Component.translatable("numen.dismiss.delete"), b -> {
             Services.NETWORK.sendToServer(
                     new com.dwinovo.numen.network.payload.DismissRequestPayload(target));
             dismissPending = null;
@@ -274,7 +459,7 @@ public final class NumenScreen extends Screen {
                 uuid = null; name = null;
             }
             rebuild();
-        }));
+        }).danger());
     }
 
     /** First roster companion that isn't {@code exclude}, or null if none. */
@@ -304,33 +489,43 @@ public final class NumenScreen extends Screen {
     // the glyph merge with its own shadow ("smudged"). This build's shadowless path ignores the colour
     // PARAM, so we bake the colour into the text's Style instead.
     private void txt(GuiGraphics g, Component c, int x, int y, int color) {
-        g.drawString(font, c.copy().withStyle(s -> s.withColor(
-                net.minecraft.network.chat.TextColor.fromRgb(color & 0xFFFFFF))), x, y, -1, false);
+        Nb.text(g, font, c, x, y, color);
     }
 
-    /** The FormattedCharSequence must already carry its colour (see {@link #colored}). */
+    /** The FormattedCharSequence must already carry its colour in its Style. */
     private void txt(GuiGraphics g, FormattedCharSequence c, int x, int y, int color) {
-        g.drawString(font, c, x, y, -1, false);
+        Nb.text(g, font, c, x, y);
     }
 
-    /** A coloured text Component (colour in the Style, so shadowless rendering keeps it). */
-    private static Component colored(String s, int color) {
-        return Component.literal(s).withStyle(st -> st.withColor(
-                net.minecraft.network.chat.TextColor.fromRgb(color & 0xFFFFFF)));
-    }
 
+    private static net.minecraft.resources.ResourceLocation chatIcon(String n) {
+        return net.minecraft.resources.ResourceLocation.fromNamespaceAndPath(
+                com.dwinovo.numen.Constants.MOD_ID, n);
+    }
+    private static final net.minecraft.resources.ResourceLocation ICON_SEND = chatIcon("icon_send");
+    private static final net.minecraft.resources.ResourceLocation ICON_MIC = chatIcon("icon_mic");
+    private static final net.minecraft.resources.ResourceLocation ICON_STOP = chatIcon("icon_stop");
+    private static final net.minecraft.resources.ResourceLocation ICON_COMPACT = chatIcon("icon_compact");
 
     private void buildChatWidgets() {
-        int inputY = top + PANEL_H - INPUT_H - PAD;
-        int compactW = 26;
-        int sendW = 42;
-        int stopW = 22;
-        int inX = left + PAD + compactW + 4;
-        int inW = PANEL_W - PAD * 2 - compactW - sendW - stopW - 12;
+        // 聊天行四键全部图标化(高频动作,含义靠图标 + 悬停 tooltip,不再占文字宽度)。
+        int inputY = top + panelH - INPUT_H - PAD;
+        int btnW = 22;
+        int inX = left + PAD + (btnW + 4) * 2;
+        int inW = panelW - PAD * 2 - btnW * 4 - 20;
 
-        compactButton = add(new SimpleButton(left + PAD, inputY, compactW, INPUT_H,
-                Component.literal("⤬"), b -> loop().requestCompact()));
+        compactButton = add(new SimpleButton(left + PAD, inputY, btnW, INPUT_H,
+                Component.translatable("numen.chat.tip.compact"), b -> loop().requestCompact())
+                .icon(ICON_COMPACT));
+        compactButton.setTooltip(net.minecraft.client.gui.components.Tooltip.create(
+                Component.translatable("numen.chat.tip.compact")));
         compactButton.active = loop().canCompact();
+
+        micButton = add(new SimpleButton(left + PAD + btnW + 4, inputY, btnW, INPUT_H,
+                Component.translatable("numen.chat.tip.mic"), b -> onMicToggle())
+                .icon(ICON_MIC));
+        micButton.setTooltip(net.minecraft.client.gui.components.Tooltip.create(
+                Component.translatable("numen.chat.tip.mic")));
 
         input = new FlatEditBox(font, inX + FIELD_INSET_X, inputY + FIELD_INSET_Y,
                 inW - FIELD_INSET_X * 2, INPUT_H - FIELD_INSET_Y * 2, Component.literal("numen.chat.input"));
@@ -340,195 +535,115 @@ public final class NumenScreen extends Screen {
         // FlatEditBox draws the hint shadowless and UNDER the caret (same widget pass), so use it
         // directly — no separate screen-side placeholder that would paint over the blinking caret.
         // Faint colour is baked into the Component's Style.
-        input.setHint(Nb.colored("Talk to " + (name == null ? "" : name) + "…", TXT_FAINT));
+        input.setHint(defaultChatHint());
         if (!savedInput.isEmpty()) { input.setValue(savedInput); savedInput = ""; }
         add(input);
         setInitialFocus(input);
 
-        sendButton = add(new SimpleButton(inX + inW + 4, inputY, sendW, INPUT_H,
-                Component.literal("Send"), b -> onSend()));
+        sendButton = add(new SimpleButton(inX + inW + 4, inputY, btnW, INPUT_H,
+                Component.translatable("numen.chat.send"), b -> onSend())
+                .icon(ICON_SEND).primary());
+        sendButton.setTooltip(net.minecraft.client.gui.components.Tooltip.create(
+                Component.translatable("numen.chat.send")));
 
-        stopButton = add(new SimpleButton(inX + inW + 4 + sendW + 4, inputY, stopW, INPUT_H,
-                Component.literal("■"), b -> loop().abort()));
+        stopButton = add(new SimpleButton(inX + inW + 4 + btnW + 4, inputY, btnW, INPUT_H,
+                Component.translatable("numen.chat.tip.stop"), b -> loop().abort())
+                .icon(ICON_STOP));
+        stopButton.setTooltip(net.minecraft.client.gui.components.Tooltip.create(
+                Component.translatable("numen.chat.tip.stop")));
         stopButton.active = loop().canInterrupt();
+    }
+
+    /** 正常的输入框占位文案("说点什么…, {name}");麦克风状态提示消失后用它复位。 */
+    private Component defaultChatHint() {
+        return Nb.colored(I18n.get("numen.chat.hint", name == null ? "" : name), TXT_FAINT);
+    }
+
+    /** 麦克风按钮:点击开录/再点停;转写文本(批量结尾一次、流式边说边刷)落进输入框。 */
+    private void onMicToggle() {
+        com.dwinovo.numen.client.stt.VoiceInputController.toggle(
+                Services.CONFIG,
+                text -> { if (input != null) input.setValue(text); },
+                // 状态提示(未配置/无麦克风/失败)落在输入框的 placeholder 上——眼睛正看的地方,醒目
+                // 却不写进真实输入。框里已有文字时 hint 不显示,由渲染里的底部一行兜底。
+                status -> {
+                    micNotice = status;
+                    micNoticeUntil = System.currentTimeMillis() + 4000;
+                    if (input != null && input.getValue().isEmpty()) {
+                        input.setHint(Nb.colored(status, FAIL));
+                    }
+                });
+        if (micButton != null) {
+            // 录音中图标换成停止方块,tooltip 跟着换——同一颗键,两种含义都一眼可读。
+            boolean rec = com.dwinovo.numen.client.stt.VoiceInputController.isActive();
+            micButton.icon(rec ? ICON_STOP : ICON_MIC);
+            micButton.setTooltip(net.minecraft.client.gui.components.Tooltip.create(
+                    Component.translatable(rec ? "numen.chat.tip.mic_stop" : "numen.chat.tip.mic")));
+        }
     }
 
     private void selectTab(Tab t) {
         if (t == tab) return;
         tab = t;
-        scroll = 0;
-        pinBottom = true;
+        chatView.reset();
         if (t == Tab.ITEMS) requestInventory();
-        if (t == Tab.SETTINGS) initModelMode();
         rebuild();
-    }
-
-    /** Decide once (on entering Settings) whether the model field starts as a preset dropdown or a
-     *  custom text box: custom-provider or a configured model that isn't a known preset → custom. */
-    private void initModelMode() {
-        INumenConfig cfg = Services.CONFIG;
-        wProvider = cfg.getProvider() == null ? "openai" : cfg.getProvider();
-        wApiKey = cfg.getApiKey() == null ? "" : cfg.getApiKey();
-        wModel = cfg.getModel() == null ? "" : cfg.getModel();
-        wBaseUrl = cfg.getBaseUrl() == null ? "" : cfg.getBaseUrl();
-        wProxy = cfg.getProxy() == null ? "" : cfg.getProxy();
-        addingSite = false;
-        ModelRegistry.Provider mp = ModelRegistry.provider(LlmProviders.normalize(wProvider));
-        boolean known = mp != null && mp.models().stream().anyMatch(m -> m.id().equals(wModel));
-        customModel = (mp != null && mp.custom()) || (!wModel.isBlank() && !known);
-    }
-
-    /** Snapshot the API-key + base-URL fields before a settings rebuild so the edits survive it. */
-    private void preserveKeyUrl() {
-        if (apiKeyInput != null) wApiKey = apiKeyInput.getValue();
-        if (baseUrlInput != null) wBaseUrl = baseUrlInput.getValue();
-        if (proxyInput != null) wProxy = proxyInput.getValue();
-    }
-
-    // ---- settings tab ----
-
-    private static final int SET_SP = 33;     // settings row pitch (5 rows + Save must fit)
-
-    private void buildSettingsWidgets() {
-        int x = left + PAD, w = PANEL_W - PAD * 2;
-        int y0 = top + HEADER_H + 8;
-
-        if (addingSite) {
-            // row0: site name + cancel
-            siteNameInput = field(x, y0 + 11, w - 20, 64, wSiteName);
-            add(new SimpleButton(x + w - 18, y0 + 11, 18, 18, Component.literal("✕"),
-                    b -> { addingSite = false; rebuild(); }));
-            buildApiKeyRow(x, y0 + SET_SP + 11, w);
-            modelInput = field(x, y0 + 2 * SET_SP + 11, w, 128, wModel);
-            baseUrlInput = field(x, y0 + 3 * SET_SP + 11, w, 256, wBaseUrl);
-        } else {
-            providerDropdown = new ProviderDropdown(wProvider, true);   // live + "+ 添加站点"
-            providerDropdown.setBounds(x, y0 + 11, w, 18);
-            buildApiKeyRow(x, y0 + SET_SP + 11, w);
-            buildModelRow(x, y0 + 2 * SET_SP + 11, w);
-            baseUrlInput = field(x, y0 + 3 * SET_SP + 11, w, 256, wBaseUrl);
-            proxyInput = field(x, y0 + 4 * SET_SP + 11, w, 128, wProxy);
-        }
-
-        add(new SimpleButton(left + PANEL_W - PAD - 64, top + PANEL_H - PAD - 18,
-                64, 18, Component.literal("Save"), b -> onSaveSettings()));
-    }
-
-    private void buildApiKeyRow(int x, int y, int w) {
-        int eyeW = 22;
-        apiKeyInput = field(x, y, w - eyeW - 2, 512, wApiKey);
-        apiKeyInput.addFormatter((text, idx) -> showKey
-                ? FormattedCharSequence.forward(text, net.minecraft.network.chat.Style.EMPTY)
-                : FormattedCharSequence.forward("•".repeat(text.length()), net.minecraft.network.chat.Style.EMPTY));
-        // Eye icon instead of a 见/隐 glyph: open eye when masked (click to show), slashed when shown.
-        add(new SimpleButton(x + w - eyeW, y, eyeW, 18, Component.empty(),
-                b -> { showKey = !showKey; ((SimpleButton) b).icon(showKey ? EYE_OFF : EYE); })
-                .icon(showKey ? EYE_OFF : EYE));
-    }
-
-    /** Model row: a preset dropdown for the provider's known models, or a free-text box (custom mode)
-     *  with a "▾" toggle back to presets. A custom provider (openai-compatible) is always free-text. */
-    private void buildModelRow(int x, int y, int w) {
-        ModelRegistry.Provider mp = ModelRegistry.provider(LlmProviders.normalize(providerDropdown.selectedId()));
-        boolean providerCustom = mp != null && mp.custom();
-        if (customModel || providerCustom) {
-            customModel = true;
-            modelDropdown = null;
-            modelInput = field(x, y, providerCustom ? w : w - 20, 128, wModel);
-            if (!providerCustom) {     // a way back to the preset list (custom providers have none)
-                add(new SimpleButton(x + w - 18, y, 18, 18, Component.literal("▾"),
-                        b -> { preserveKeyUrl(); customModel = false; rebuild(); }));
-            }
-        } else {
-            modelInput = null;
-            boolean known = mp != null && mp.models().stream().anyMatch(m -> m.id().equals(wModel));
-            String sel = known ? wModel
-                    : (mp != null && !mp.models().isEmpty() ? mp.models().get(0).id() : CUSTOM_MODEL);
-            modelDropdown = new Dropdown(modelItems(mp), sel);
-            modelDropdown.setBounds(x, y, w, 18);
-        }
-    }
-
-    private List<Dropdown.Item> modelItems(ModelRegistry.Provider mp) {
-        List<Dropdown.Item> items = new ArrayList<>();
-        if (mp != null) for (ModelRegistry.Model m : mp.models()) items.add(new Dropdown.Item(m.id(), m.id()));
-        items.add(new Dropdown.Item(CUSTOM_MODEL, "自定义…"));
-        return items;
     }
 
     /** Shadowless placeholder for an empty, unfocused field — the EditBox's own hint renders with a shadow. */
     private void placeholder(GuiGraphics g, EditBox f, String text) {
-        if (f != null && f.getValue().isEmpty() && !f.isFocused() && text != null && !text.isEmpty()) {
+        if (f != null && f.visible && f.getValue().isEmpty() && !f.isFocused()
+                && text != null && !text.isEmpty()) {
             txt(g, Component.literal(text), f.getX(), f.getY(), TXT_FAINT);
         }
     }
 
-    private EditBox field(int x, int y, int w, int max, String value) {
-        EditBox e = new FlatEditBox(font, x + FIELD_INSET_X, y + FIELD_INSET_Y,
-                w - FIELD_INSET_X * 2, 18 - FIELD_INSET_Y * 2, Component.literal(""));
-        e.setMaxLength(max);
-        e.setValue(value == null ? "" : value);
-        e.setBordered(false);
-        e.setTextColor(TXT);
-        add(e);
-        return e;
+    /** 皮肤 png 从系统拖进游戏窗口——皮肤表单打开时由 SettingsView 接住。 */
+    @Override
+    public void onFilesDrop(List<java.nio.file.Path> paths) {
+        if (tab == Tab.SETTINGS) settings.onFilesDrop(paths);
     }
 
-    private void onSaveSettings() {
-        INumenConfig cfg = Services.CONFIG;
-        if (addingSite) {                          // create a new user site, then select it
-            String name = siteNameInput.getValue().trim();
-            String url = baseUrlInput.getValue().trim();
-            String mdl = modelInput.getValue().trim();
-            if (name.isEmpty() || url.isEmpty()) { warnUntil = System.currentTimeMillis() + 4000; return; }
-            String id = ModelRegistry.addCustomSite(name, url, mdl);
-            if (id == null) { warnUntil = System.currentTimeMillis() + 4000; return; }
-            cfg.setProvider(id);
-            cfg.setModel(mdl);
-            cfg.setApiKey(apiKeyInput.getValue());
-            cfg.setBaseUrl("");                    // site carries the URL now
-            cfg.setProxy(wProxy);
-            cfg.save();
-            NumenLlmClient.reset();
-            addingSite = false;
-            wProvider = id; wModel = mdl; wBaseUrl = ""; customModel = false;
-            rebuild();
-            savedFlashUntil = System.currentTimeMillis() + 1500;
-            return;
+    /** BlockFrame workspace chrome, drawn procedurally from the CURRENT theme — border frame,
+     *  rail column, header band + underline, panel ground with the 16px dot grid. Replaces the
+     *  old WARM-baked workspace sprite so a theme switch recolours the whole frame. */
+    private void drawWorkspace(GuiGraphics g) {
+        UiTheme t = UiTheme.current();
+        int x0 = railX, y0 = top, x1 = railX + RAIL_W + panelW, y1 = top + panelH;
+        g.fill(x0, y0, x1, y1, t.border());                          // frame + rail divider base
+        g.fill(x0 + 3, y0 + 3, x0 + RAIL_W, y1 - 3, t.ground());     // rail column
+        g.fill(left + 3, y0 + 3, x1 - 3, y0 + 20, t.band());         // header band (underline = border gap)
+        g.fill(left + 3, y0 + HEADER_H, x1 - 3, y1 - 3, t.ground()); // panel ground
+        for (int dy = y0 + HEADER_H + 7; dy < y1 - 5; dy += 16) {    // dot grid (translucent theme dot)
+            for (int dx = left + 10; dx < x1 - 5; dx += 16) {
+                g.fill(dx, dy, dx + 2, dy + 2, t.dot());
+            }
         }
-        cfg.setProvider(providerDropdown.selectedId());
-        cfg.setApiKey(apiKeyInput.getValue());
-        String model = customModel
-                ? (modelInput != null ? modelInput.getValue().trim() : "")
-                : (modelDropdown != null && !CUSTOM_MODEL.equals(modelDropdown.selectedId())
-                        ? modelDropdown.selectedId() : "");
-        cfg.setModel(model);
-        cfg.setBaseUrl(baseUrlInput.getValue());
-        cfg.setProxy(proxyInput == null ? wProxy : proxyInput.getValue());
-        cfg.save();
-        NumenLlmClient.reset();
-        savedFlashUntil = System.currentTimeMillis() + 1500;
     }
 
-    private void renderSettings(GuiGraphics g, int mouseX, int mouseY) {
-        int x = left + PAD;
-        int y0 = top + HEADER_H + 8;
-        if (addingSite) {
-            txt(g, Component.literal("Site name"), x, y0, TXT_MUTED);
-            txt(g, Component.literal("API Key"), x, y0 + SET_SP, TXT_MUTED);
-            txt(g, Component.literal("Model"), x, y0 + 2 * SET_SP, TXT_MUTED);
-            txt(g, Component.literal("Base URL"), x, y0 + 3 * SET_SP, TXT_MUTED);
-        } else {
-            txt(g, Component.literal("Provider"), x, y0, TXT_MUTED);
-            txt(g, Component.literal("API Key"), x, y0 + SET_SP, TXT_MUTED);
-            txt(g, Component.literal("Model"), x, y0 + 2 * SET_SP, TXT_MUTED);
-            txt(g, Component.literal("Base URL"), x, y0 + 3 * SET_SP, TXT_MUTED);
-            txt(g, Component.literal("Proxy"), x, y0 + 4 * SET_SP, TXT_MUTED);
+    /** 显示过滤统一走 {@link com.dwinovo.numen.client.chat.ChatDisplayFilter}(可整体切换)。 */
+    /** token 数的人读格式:1350 → "1.4k",132400 → "132.4k",1_200_000 → "1.2m"。 */
+    private static String fmtTokens(long n) {
+        if (n >= 1_000_000) return String.format("%.1fm", n / 1_000_000.0);
+        if (n >= 1_000) return String.format("%.1fk", n / 1_000.0);
+        return String.valueOf(n);
+    }
+
+    /** Truncate {@code s} with an ellipsis so it fits in {@code maxW} px. */
+    private String clip(String s, int maxW) {
+        if (font.width(s) <= maxW) return s;
+        StringBuilder b = new StringBuilder();
+        for (int i = 0; i < s.length(); i++) {
+            if (font.width(b.toString() + s.charAt(i) + "…") > maxW) break;
+            b.append(s.charAt(i));
         }
-        if (savedFlashUntil > System.currentTimeMillis()) {
-            txt(g, Component.literal("✔ saved"), x, top + PANEL_H - PAD - 14, OK);
-        }
-        // the dropdowns themselves render in render, AFTER the widgets (open list on top)
+        return b + "…";
+    }
+
+    /** The active companion's current persona name (green marker in the list), or null. */
+    private String activePersonaName() {
+        if (uuid == null) return null;
+        return AgentLoopRegistry.get(uuid).map(EntityAgentLoop::personaName).orElse(null);
     }
 
     @Override
@@ -551,24 +666,34 @@ public final class NumenScreen extends Screen {
         if (input == null) return;
         String text = input.getValue() == null ? "" : input.getValue().trim();
         if (text.isEmpty()) return;
-        if (!NumenLlmClient.isConfigured()) {
-            com.dwinovo.numen.Constants.LOG.warn("[numen-chat] no apiKey; open Settings.");
-            warnUntil = System.currentTimeMillis() + 4000;   // visible hint instead of a silent no-op
+        // Endpoint check for THIS companion (its provider entry, not the legacy global
+        // key): unbound / keyless surfaces as a visible hint, never a crash or a
+        // silent no-op — the no-provider safety net.
+        String problem = loop().endpointProblem();
+        if (problem != null) {
+            com.dwinovo.numen.Constants.LOG.warn("[numen-chat] {}", problem);
+            warnText = problem;
+            warnUntil = System.currentTimeMillis() + 4000;
             return;
         }
         loop().submitPrompt(text);
         input.setValue("");
-        pinBottom = true;
+        chatView.pinToBottom();
     }
 
     // ---- input ----
 
     @Override
-    public boolean keyPressed(KeyEvent event) {
+    public boolean keyPressed(net.minecraft.client.input.KeyEvent event) {
         int k = event.key();
         if (dismissPending != null) {
             if (k == 256) { dismissPending = null; rebuild(); return true; }   // Esc cancels the confirm
             return super.keyPressed(event);
+        }
+        // 设置页的模态(删除确认卡 / 新建编辑表单卡):Esc 收起卡片而不是关掉整个面板。
+        if (k == 256 && tab == Tab.SETTINGS && !summoning
+                && (settings.cancelModal() || settings.cancelForm())) {
+            return true;
         }
         if (summoning) {
             if (k == 257 || k == 335) { doSummon(); return true; }    // Enter
@@ -584,24 +709,83 @@ public final class NumenScreen extends Screen {
 
     private void doSummon() {
         String n = summonInput == null ? "" : summonInput.getValue().trim();
-        if (n.isEmpty()) return;
-        Services.NETWORK.sendToServer(new com.dwinovo.numen.network.payload.SummonRequestPayload(n));
+        if (n.isEmpty()) {
+            warnText = I18n.get(ModLanguageData.Keys.SUMMON_WARN_NAME);
+            warnUntil = System.currentTimeMillis() + 4000;
+            return;
+        }
+        // A model config is REQUIRED. Empty library → error AT THE CLICK, pointing
+        // the way (no ambient red text before the player acts).
+        if (summonProviderId == null) {
+            warnText = I18n.get(ModLanguageData.Keys.SUMMON_WARN_PROVIDER);
+            warnUntil = System.currentTimeMillis() + 4000;
+            return;
+        }
+        // 名字限定 Minecraft 官方命名规则(3~16 位英文/数字/下划线)——中文名在玩家系统
+        // 各处容易出错,而且名字同时就是皮肤来源:同名正版玩家的皮肤会自动穿上。
+        if (!n.matches("[A-Za-z0-9_]{3,16}")) {
+            warnText = I18n.get(ModLanguageData.Keys.SUMMON_WARN_NAME_FORMAT);
+            warnUntil = System.currentTimeMillis() + 4000;
+            return;
+        }
+        // Remember the picks by name; CompanionListPayload applies them when the new companion arrives.
+        if (summonPersonaId != null) com.dwinovo.numen.persona.PersonaLibrary.pendSummon(n, summonPersonaId);
+        com.dwinovo.numen.agent.llm.ProviderLibrary.pendSummon(n, summonProviderId);
+        if (summonVoiceId != null) com.dwinovo.numen.client.voice.VoiceLibrary.pendSummon(n, summonVoiceId);
+        // 自定义皮肤:库里存好的 Mojang 签名数据随包捎给服务端(自验证,伪造不了);
+        // 没选就留空,服务端按名字找同名正版皮肤。
+        String skinValue = "", skinSig = "";
+        var skinEntry = com.dwinovo.numen.client.skin.SkinLibrary.instance().get(summonSkinId);
+        if (skinEntry != null && skinEntry.signed()) {
+            skinValue = skinEntry.value();
+            skinSig = skinEntry.signature();
+        }
+        com.dwinovo.numen.Constants.LOG.info("[numen-skin] 召唤 {}: 皮肤选择={} 条目={} 携带签名数据={}",
+                n, summonSkinId, skinEntry == null ? "null" : skinEntry.name(), !skinValue.isEmpty());
+        Services.NETWORK.sendToServer(
+                new com.dwinovo.numen.network.payload.SummonRequestPayload(n, skinValue, skinSig));
         summoning = false;
+        summonPersonaId = null;
+        summonProviderId = null;
+        summonVoiceId = null;
         rebuild();   // the new companion arrives via CompanionListPayload — click its avatar to open
     }
 
     @Override
-    public boolean mouseClicked(MouseButtonEvent event, boolean dbl) {
-        double mouseX = event.x(), mouseY = event.y();
+    public boolean mouseClicked(net.minecraft.client.input.MouseButtonEvent event, boolean doubleClick) {
+        double mouseX = event.x();
+        double mouseY = event.y();
         int button = event.button();
         if (dismissPending != null) {
-            return super.mouseClicked(event, dbl);   // modal confirm — let its Cancel/Delete buttons handle it
+            return super.mouseClicked(event, doubleClick);   // modal confirm — let its Cancel/Delete buttons handle it
+        }
+        if (tab == Tab.SETTINGS && settings.modalActive()) {
+            // 设置页的删除确认模态:侧栏/页签/列表全部只是背景,只有卡上按钮可点。
+            return super.mouseClicked(event, doubleClick);
+        }
+        if (!summoning && tab == Tab.SETTINGS && settings.formActive()) {
+            // 设置页的表单模态:先给表单自己的下拉路由,其余只放行 widget 通道
+            // (卡上字段/按钮),侧栏/页签/背景列表全部屏蔽。
+            if (button == 0 && settings.mouseClicked(mouseX, mouseY)) return true;
+            return super.mouseClicked(event, doubleClick);
         }
         if (button == 0) {
+            // Summon dropdowns get first pick (their open lists overlay the panel).
+            // 遮挡关系:先路由"正展开"的那一个——下排下拉向上翻时,展开列表盖住
+            // 上排的折叠框,固定顺序会让上排先吞掉点击。
+            if (summoning && routeSummonDropdownClick(mouseX, mouseY)) {
+                return true;
+            }
             UUID close = railCloseAt((int) mouseX, (int) mouseY);
-            if (close != null) { dismissPending = close; rebuild(); return true; }   // ✕ → confirm bar
+            if (close != null) {   // ✕ → modal confirm(退出召唤态,否则 rebuild 会建召唤控件而非确认卡)
+                summoning = false;
+                dismissPending = close;
+                rebuild();
+                return true;
+            }
             if (railPlusAt((int) mouseX, (int) mouseY)) {   // + → start the summon name prompt
                 summoning = !summoning;
+                if (summoning) { summonPersonaId = null; summonVoiceId = null; summonSkinId = null; }   // fresh summon starts at "默认/无"
                 rebuild();
                 return true;
             }
@@ -617,37 +801,12 @@ public final class NumenScreen extends Screen {
                 }
                 return true;
             }
-            if (tab == Tab.SETTINGS && providerDropdown != null) {
-                String before = providerDropdown.selectedId();
-                if (providerDropdown.mouseClicked(mouseX, mouseY)) {
-                    if (modelDropdown != null) modelDropdown.close();
-                    String sel = providerDropdown.selectedId();
-                    if (ProviderDropdown.ADD_SITE.equals(sel)) {            // "+ 添加站点" → add-site editor
-                        preserveKeyUrl();
-                        addingSite = true; wSiteName = ""; wBaseUrl = ""; wModel = "";
-                        rebuild();
-                    } else if (!sel.equals(before)) {                      // provider changed → reset model
-                        preserveKeyUrl();
-                        wProvider = sel;
-                        ModelRegistry.Provider mp = ModelRegistry.provider(LlmProviders.normalize(wProvider));
-                        customModel = mp != null && mp.custom();
-                        wModel = (mp != null && !mp.models().isEmpty()) ? mp.models().get(0).id() : "";
-                        rebuild();
-                    }
-                    return true;
-                }
+            if (summoning) {
+                // 召唤模态:页签/聊天/设置全在暗幕之下,只放行 widget 通道(卡上控件);
+                // 侧栏的 +/头像/✕ 在上面已处理(保留为模态的逃生口)。
+                return super.mouseClicked(event, doubleClick);
             }
-            if (tab == Tab.SETTINGS && modelDropdown != null
-                    && modelDropdown.mouseClicked(mouseX, mouseY)) {
-                providerDropdown.close();
-                if (CUSTOM_MODEL.equals(modelDropdown.selectedId())) {       // "自定义…" → free-text box
-                    preserveKeyUrl();
-                    customModel = true;
-                    wModel = "";
-                    rebuild();
-                }
-                return true;
-            }
+            if (tab == Tab.SETTINGS && settings.mouseClicked(mouseX, mouseY)) return true;
             int my = (int) mouseY;
             if (my >= top && my < top + HEADER_H) {
                 for (int i = 0; i < 3; i++) {
@@ -657,123 +816,179 @@ public final class NumenScreen extends Screen {
                     }
                 }
             }
-            if (tab == Tab.CHAT && toggleFoldAt((int) mouseX, my)) return true;
+            if (tab == Tab.CHAT && chatView.mouseClicked(mouseX, mouseY)) return true;
         }
-        return super.mouseClicked(event, dbl);
-    }
-
-    /** If a chat fold-toggle row sits under (mx,my), flip its expanded state. Mirrors renderChat geometry. */
-    private boolean toggleFoldAt(int mx, int my) {
-        int bodyY = top + HEADER_H + 4;
-        int bodyBottom = top + PANEL_H - INPUT_H - PAD - 6;
-        int transX = left + PAD;
-        int transW = PANEL_W - PAD * 2 - PLAN_W - 8;
-        if (mx < transX || mx >= transX + transW || my < bodyY || my >= bodyBottom) return false;
-        List<Row> rows = buildRows(transW);
-        int idx = (my - (bodyY - scroll)) / LINE_H;
-        if (idx < 0 || idx >= rows.size()) return false;
-        String key = rows.get(idx).foldKey();
-        if (key == null) return false;
-        if (!expandedGroups.add(key)) expandedGroups.remove(key);   // toggle open/closed
-        return true;
+        return super.mouseClicked(event, doubleClick);
     }
 
     @Override
     public boolean mouseScrolled(double mx, double my, double sx, double sy) {
+        // 模态确认卡在场:背景(侧栏名册/设置列表)不响应滚轮。
+        if (dismissPending != null || (tab == Tab.SETTINGS && settings.modalActive())) {
+            return false;
+        }
+        // 打开着的下拉列表优先吃滚轮(列表被面板截断时滚动余下的行)。
+        if (sy != 0) {
+            for (Dropdown d : new Dropdown[]{summonSkinDropdown, summonPersonaDropdown,
+                    summonProviderDropdown, summonVoiceDropdown}) {
+                if (d != null && d.mouseScrolled(mx, my, sy)) return true;
+            }
+        }
+        if (summoning) return false;   // 召唤模态:背景(侧栏/聊天/设置)不响应滚轮
+        if (tab == Tab.SETTINGS && settings.formActive()) {
+            // 表单模态:只放行表单自己的滚动(下拉列表 + 声线表单视口),背景列表/侧栏屏蔽。
+            return sy != 0 && settings.mouseScrolledEarly(mx, my, sy);
+        }
+        // 设置页第一段:表单下拉 + 声线表单整体滚动(顺位与拆分前一致)。
+        if (sy != 0 && tab == Tab.SETTINGS && settings.mouseScrolledEarly(mx, my, sy)) return true;
         // Wheel over the left rail column scrolls the roster (works on any tab).
         if (sy != 0 && mx >= railX && mx < railX + RAIL_W && maxRailScroll() > 0) {
             railScroll = Math.clamp((long) (railScroll - sy), 0, maxRailScroll());
             return true;
         }
         if (tab == Tab.CHAT && sy != 0) {
-            scroll = Math.clamp((long) (scroll - sy * LINE_H * 3), 0, lastMaxScroll);
-            pinBottom = scroll >= lastMaxScroll;
-            return true;
+            return chatView.mouseScrolled(sy);
         }
+        if (tab == Tab.SETTINGS && sy != 0 && settings.mouseScrolledList(sy)) return true;
         return super.mouseScrolled(mx, my, sx, sy);
     }
 
     // ---- render ----
 
     @Override
+    public void renderBackground(GuiGraphics g, int mouseX, int mouseY, float partial) {
+        super.renderBackground(g, mouseX, mouseY, partial);
+        // 控件层之下的自绘底(如人设编辑框的圆角底)——控件在 super.render 里先画,
+        // 视图的 render 晚于控件,压不到底,只能走这里。
+        if (tab == Tab.SETTINGS) {
+            settings.renderUnderlay(g);
+        }
+    }
+
+    @Override
     public void render(GuiGraphics g, int mouseX, int mouseY, float partial) {
         super.render(g, mouseX, mouseY, partial);
+        pendingTip = null;   // recollected each frame by the section renderers
 
-        // ONE merged Cottage sprite: left rail column + panel, continuous header, no gap.
-        g.blitSprite(net.minecraft.client.renderer.RenderPipelines.GUI_TEXTURED, 
-                WORKSPACE_SPRITE, railX, top, RAIL_W + PANEL_W, PANEL_H);
+        drawWorkspace(g);                // rail column + panel chrome, in the CURRENT theme's colours
         renderRail(g, mouseX, mouseY);   // avatars + status + summon tile on the rail column
 
-        txt(g, Component.literal(name == null ? "Numen" : name), left + PAD, top + 7, ON_BAND);
+        // 头部一行四个成员从右往左让位:tab(定宽) ← 用量 ← 人设名(可整个消失) ← 名字(最后裁)。
+        int headerLimit = tabX[0] - 8;
+        if (!summoning && dismissPending == null && tab == Tab.CHAT && uuid != null) {
+            headerLimit = renderUsage(g, mouseX, mouseY) - 8;
+        }
+        String nm = clip(name == null ? "Numen" : name, Math.max(24, headerLimit - (left + PAD)));
+        txt(g, Component.literal(nm), left + PAD, top + 7, ON_BAND);
+        int afterName = left + PAD + font.width(nm) + 6;
         if (uuid != null && ClientDeaths.isDead(uuid)) {        // active companion dead — respawn countdown
             long rem = ClientDeaths.remainingMs(uuid);
-            txt(g, Component.literal("· 复活中 " + (int) Math.ceil(rem / 1000.0) + "s"),
-                    left + PAD + font.width(name == null ? "Numen" : name) + 6, top + 7, ON_BAND);
+            String rs = I18n.get("numen.respawn", (int) Math.ceil(rem / 1000.0));
+            if (afterName < headerLimit) {
+                txt(g, Component.literal(clip(rs, headerLimit - afterName)), afterName, top + 7, ON_BAND);
+            }
+        } else {
+            String pn = activePersonaName();                   // current persona, faint, right after the name
+            if (pn != null && afterName + font.width("…") <= headerLimit) {
+                txt(g, Component.literal(clip(pn, headerLimit - afterName)), afterName, top + 7, ON_BAND_FAINT);
+            }
         }
         renderTabs(g, mouseX, mouseY);
 
+        // 当前 tab 内容永远渲染——召唤模态时它是暗幕下的背景(widgets 只建了召唤卡的,
+        // 背景不可交互)。
+        if (uuid != null && !summoning) {
+            if (compactButton != null) compactButton.active = loop().canCompact();
+            if (stopButton != null) stopButton.active = loop().canInterrupt();
+        }
+        switch (tab) {
+            case SETTINGS -> settings.render(g, mouseX, mouseY);   // global — works with no companion
+            case CHAT -> { if (uuid != null) renderChat(g, mouseX, mouseY); else emptyHint(g); }
+            case ITEMS -> {
+                if (uuid != null) {
+                    com.dwinovo.numen.client.screen.items.ItemsView.render(
+                            g, font, uuid, left, top, panelW, panelH, HEADER_H, mouseX, mouseY);
+                } else {
+                    emptyHint(g);
+                }
+            }
+        }
+        if (!summoning && tab == Tab.CHAT && warnUntil > System.currentTimeMillis()) {
+            // endpoint-problem hint above the input
+            txt(g, warnText != null ? Component.literal(warnText)
+                            : Component.translatable("numen.chat.no_key"),
+                    left + PAD, top + panelH - INPUT_H - PAD - 11, FAIL);
+        }
+        if (summoning) {
+            // 召唤模态:暗幕 + 居中卡(与确认卡同族),行偏移沿用原布局表。
+            g.fill(railX, top, railX + RAIL_W + panelW, top + panelH,
+                    (UiTheme.current().border() & 0xFFFFFF) | 0x99000000);
+            com.dwinovo.numen.client.ui.RoundRect.card(g, sumCardX(), sumCardY(),
+                    sumCardX() + sumCardW(), sumCardBottom(), 6,
+                    UiTheme.current().aiFill(), UiTheme.current().aiBorder());
+            int y0 = sumY0();   // offsets in lockstep with buildSummonField
+            txt(g, Component.translatable("numen.summon.title"), sumX(), y0 + 8, TXT);
+            txt(g, Component.translatable(ModLanguageData.Keys.SUMMON_NAME), sumX(), y0 + 24, TXT_MUTED);
+            placeholder(g, summonInput, I18n.get(ModLanguageData.Keys.SUMMON_NAME_PLACEHOLDER));
+            txt(g, Component.translatable(ModLanguageData.Keys.SUMMON_PERSONA_LABEL), sumX(), y0 + 58, TXT_MUTED);
+            txt(g, Component.literal(I18n.get(ModLanguageData.Keys.PROVIDER_TITLE)
+                    + (summonProviderDropdown == null ? I18n.get(ModLanguageData.Keys.SUMMON_PROVIDER_EMPTY) : "")),
+                    sumX(), y0 + 92, TXT_MUTED);
+            txt(g, Component.literal(I18n.get(ModLanguageData.Keys.VOICE_SUMMON_LABEL)
+                    + (summonVoiceDropdown == null ? I18n.get(ModLanguageData.Keys.VOICE_SUMMON_EMPTY) : "")),
+                    sumX(), y0 + 126, TXT_MUTED);
+            txt(g, Component.translatable(ModLanguageData.Keys.SUMMON_SKIN),
+                    sumX() + summonHalfW() + 6, y0 + 126, TXT_MUTED);
+            txt(g, Component.translatable("numen.summon.hint"),
+                    sumX(), y0 + 186, TXT_FAINT);
+        }
+
+        // 删除同伴改模态:上面的 tab 内容只是背景(rebuild 只建了确认卡的两颗按钮,
+        // 背景不可交互),暗幕+确认卡压在上面;按钮在其后的 widget 通道渲染,浮在卡上。
         if (dismissPending != null) {
-            txt(g, Component.literal("删除同伴 \"" + nameFor(dismissPending) + "\"？"),
-                    left + PAD, top + HEADER_H + 12, TXT);
-            txt(g, Component.literal("永久删除 · 背包会掉落在原地 · 无法撤销"),
-                    left + PAD, top + HEADER_H + 30, FAIL);
-        } else if (summoning) {
-            txt(g, Component.literal("Summon a companion"), left + PAD, top + HEADER_H + 8, TXT);
-            txt(g, Component.literal("type a name · Enter to confirm · Esc to cancel"),
-                    left + PAD, top + HEADER_H + 48, TXT_FAINT);
-        } else {
-            if (uuid != null) {
-                if (compactButton != null) compactButton.active = loop().canCompact();
-                if (stopButton != null) stopButton.active = loop().canInterrupt();
-            }
-            switch (tab) {
-                case SETTINGS -> renderSettings(g, mouseX, mouseY);   // global — works with no companion
-                case CHAT -> { if (uuid != null) renderChat(g); else emptyHint(g); }
-                case ITEMS -> { if (uuid != null) renderItems(g, mouseX, mouseY); else emptyHint(g); }
-            }
-            if (tab == Tab.CHAT && warnUntil > System.currentTimeMillis()) {   // no-API-key hint above the input
-                txt(g, Component.literal("⚠ No API key — open Settings to add one"),
-                        left + PAD, top + PANEL_H - INPUT_H - PAD - 11, FAIL);
-            }
+            com.dwinovo.numen.client.ui.ConfirmModal.render(g, font,
+                    railX, railX + RAIL_W + panelW, top, panelH, dismissTitle(), dismissWarn());
         }
 
         // Widgets render LAST, on top of the panel background (fixes the "dim fields" — the panel fill
         // used to paint over the auto-rendered widgets). Text fields are borderless EditBoxes, so draw
-        // a parchment field background + border behind each before it renders its text.
+        // the shared rounded field card behind each before it renders its text.
         for (AbstractWidget w : overlay) {
-            if (w instanceof EditBox eb) {                          // parchment frame, inflated past the inset text
-                g.blitSprite(net.minecraft.client.renderer.RenderPipelines.GUI_TEXTURED, 
-                        FIELD_SPRITE, eb.getX() - FIELD_INSET_X, eb.getY() - FIELD_INSET_Y,
-                        eb.getWidth() + FIELD_INSET_X * 2, eb.getHeight() + FIELD_INSET_Y * 2);
+            // visible 检查:声线表单滚出视口的 EditBox 隐藏了自己,框也必须跟着消失
+            // (否则空框越过面板边缘悬在世界上)。
+            if (w instanceof EditBox eb && eb.visible) {
+                // 所有文本字段与气泡同款的圆角奶油卡;聚焦的字段边框亮 CTA。
+                com.dwinovo.numen.client.ui.RoundRect.card(g,
+                        eb.getX() - FIELD_INSET_X, eb.getY() - FIELD_INSET_Y,
+                        eb.getX() + eb.getWidth() + FIELD_INSET_X,
+                        eb.getY() + eb.getHeight() + FIELD_INSET_Y, 5,
+                        UiTheme.current().aiFill(),
+                        eb.isFocused() ? UiTheme.current().cta() : UiTheme.current().aiBorder());
             }
         }
         for (AbstractWidget w : overlay) {
             w.render(g, mouseX, mouseY, partial);
         }
-        // Base URL / Proxy placeholders, drawn shadowless by us (the EditBox hint renders with a shadow).
-        if (tab == Tab.SETTINGS) {
-            String urlPh = addingSite ? "https://… (OpenAI-compatible)"
-                    : LlmProviders.byId(providerDropdown.selectedId()).defaultBaseUrl();
-            placeholder(g, baseUrlInput, urlPh);
-            placeholder(g, proxyInput, "host:port (optional)");
-            // Model + site-name placeholders, also shadowless (these EditBoxes are null outside
-            // custom-model / add-site mode, and placeholder() no-ops on null/non-empty/focused).
-            placeholder(g, modelInput, addingSite ? "model id"
-                    : LlmProviders.byId(providerDropdown.selectedId()).defaultModel());
-            if (addingSite) placeholder(g, siteNameInput, "e.g. My Proxy");
+        // Settings-tab overlay pass: field placeholders, voice-form row labels, and the form
+        // dropdowns' open lists (drawn last so they sit above the fields) — see SettingsView.
+        // 同伴删除模态在场时跳过——占位符/行标题不能画到暗幕上面。
+        if (tab == Tab.SETTINGS && dismissPending == null && !summoning) {
+            settings.renderOverlays(g, mouseX, mouseY);
         }
         // (Chat-input placeholder is the FlatEditBox hint now — drawn shadowless and under the
         // caret in the widget pass, so it can't paint over the caret like a screen-side draw did.)
-        // The provider dropdown's open list must sit above even the fields.
-        if (tab == Tab.SETTINGS) {
-            // render the non-open one first so the open list draws on top
-            if (modelDropdown != null && providerDropdown != null && providerDropdown.isOpen()) {
-                modelDropdown.render(g, font, mouseX, mouseY);
-                providerDropdown.render(g, font, mouseX, mouseY);
-            } else {
-                if (providerDropdown != null) providerDropdown.render(g, font, mouseX, mouseY);
-                if (modelDropdown != null) modelDropdown.render(g, font, mouseX, mouseY);
-            }
+        // Summon warn — shown only when 创建 was clicked and something is missing
+        // (error at the action, never ambient text). Takes the hint line's spot.
+        if (summoning && warnUntil > System.currentTimeMillis() && warnText != null) {
+            g.drawString(font, warnText, sumX(), sumY0() + 186, 0xFFCC6666, false);
+        }
+        if (summoning) {
+            renderSummonDropdowns(g, mouseX, mouseY);
+        }
+
+        // Hovered MCP / skill row tooltip — drawn last so nothing paints over it.
+        if (pendingTip != null) {
+            g.setComponentTooltipForNextFrame(font, pendingTip, pendingTipX, pendingTipY);
         }
     }
 
@@ -820,7 +1035,7 @@ public final class NumenScreen extends Screen {
             }
         }
         // "+" summon tile (baked "+" glyph), pinned to the rail bottom
-        int py = top + PANEL_H - PAD - RAIL_AV;
+        int py = top + panelH - PAD - RAIL_AV;
         // scroll cues — gold chevrons when the roster overflows the rail in either direction
         int cx = ax + RAIL_AV / 2;
         if (railScroll > 0) chevron(g, cx, top + 1, true);
@@ -837,7 +1052,7 @@ public final class NumenScreen extends Screen {
 
     /** Bottom edge an avatar may reach (a gap above the pinned "+" tile). */
     private int railBottomEdge() {
-        return top + PANEL_H - PAD - RAIL_AV - RAIL_BOT_GAP;
+        return top + panelH - PAD - RAIL_AV - RAIL_BOT_GAP;
     }
 
     /** How many avatar slots fit in the rail above the pinned "+" tile. */
@@ -878,7 +1093,7 @@ public final class NumenScreen extends Screen {
 
     private boolean railPlusAt(int mx, int my) {
         int ax = railX + (RAIL_W - RAIL_AV) / 2;
-        int py = top + PANEL_H - PAD - RAIL_AV;
+        int py = top + panelH - PAD - RAIL_AV;
         return mx >= ax && mx < ax + RAIL_AV && my >= py && my < py + RAIL_AV;
     }
 
@@ -892,8 +1107,7 @@ public final class NumenScreen extends Screen {
     }
 
     private static PlayerSkin skinFor(UUID u) {
-        AbstractClientPlayer e = ClientNumenLookup.resolve(u);
-        return e != null ? e.getSkin() : DefaultPlayerSkin.get(u);
+        return com.dwinovo.numen.client.agent.KnownSkins.of(u);
     }
 
     /** Roster index of the avatar under (mx,my), or -1. */
@@ -912,12 +1126,12 @@ public final class NumenScreen extends Screen {
     }
 
     private void emptyHint(GuiGraphics g) {
-        txt(g, Component.literal("No companions. Click + to summon one."),
+        txt(g, Component.translatable("numen.empty.no_companions"),
                 left + PAD, top + HEADER_H + 10, TXT_FAINT);
     }
 
     private void renderTabs(GuiGraphics g, int mouseX, int mouseY) {
-        String[] labels = {"Chat", "Items", "Settings"};
+        String[] labels = tabLabels();
         for (int i = 0; i < 3; i++) {
             boolean active = tab == Tab.values()[i];
             boolean hover = mouseX >= tabX[i] && mouseX < tabX[i] + tabW[i]
@@ -930,382 +1144,55 @@ public final class NumenScreen extends Screen {
         }
     }
 
-    private static final int ICON = 9;        // native vitals-icon size
-    private static final int ICON_STEP = 9;   // touching = one chunky bar
-
-    /** A row of segmented icons for a 0..max stat (2 units per icon): empty sockets first, then
-     *  full / half overlaid. Used for hearts (HP) and drumsticks (hunger). */
-    private void renderStatRow(GuiGraphics g, int x, int y, float value, float max,
-                               net.minecraft.resources.Identifier full,
-                               net.minecraft.resources.Identifier half,
-                               net.minecraft.resources.Identifier empty) {
-        int units = Math.max(1, (int) Math.ceil(max / 2f));
-        for (int i = 0; i < units; i++) {
-            int ix = x + i * ICON_STEP;
-            g.blitSprite(net.minecraft.client.renderer.RenderPipelines.GUI_TEXTURED, empty, ix, y, ICON, ICON);
-            float v = value - i * 2f;
-            if (v >= 2f)      g.blitSprite(net.minecraft.client.renderer.RenderPipelines.GUI_TEXTURED, full, ix, y, ICON, ICON);
-            else if (v >= 1f) g.blitSprite(net.minecraft.client.renderer.RenderPipelines.GUI_TEXTURED, half, ix, y, ICON, ICON);
-        }
-    }
-
-    /** Live mouse-following 3D portrait of the companion — the body IS a client player entity, so the
-     *  vanilla player renderer draws it for free. Sits in a recessed socket (slot_alt stretched). */
-    private void renderPortrait(GuiGraphics g, AbstractClientPlayer e,
-                                int x, int y, int w, int h, int mouseX, int mouseY) {
-        g.blitSprite(net.minecraft.client.renderer.RenderPipelines.GUI_TEXTURED, SLOT_ALT, x, y, w, h);
-        if (e == null) return;
-        int scale = (int) (h * 0.45f);
-        net.minecraft.client.gui.screens.inventory.InventoryScreen.renderEntityInInventoryFollowsMouse(
-                g, x + 2, y + 2, x + w - 2, y + h - 2, scale, 0.0625f,
-                (float) mouseX, (float) mouseY, e);
-    }
-
-    private void slotBg(GuiGraphics g, net.minecraft.resources.Identifier sprite, int x, int y) {
-        g.blitSprite(net.minecraft.client.renderer.RenderPipelines.GUI_TEXTURED, sprite, x, y, 16, 16);
-    }
-
-    private void stackOn(GuiGraphics g, ItemStack st, int x, int y, int mouseX, int mouseY) {
-        if (st == null || st.isEmpty()) return;
-        g.renderItem(st, x, y);
-        g.renderItemDecorations(font, st, x, y);
-        if (mouseX >= x && mouseX < x + 16 && mouseY >= y && mouseY < y + 16) {
-            g.setTooltipForNextFrame(font, st, mouseX, mouseY);
-        }
-    }
-
-    /** One equipment/armor socket, read off the live client entity (equipment IS client-synced). */
-    private void drawEquip(GuiGraphics g, AbstractClientPlayer e, EquipmentSlot slot,
-                           int x, int y, int mouseX, int mouseY) {
-        slotBg(g, SLOT_SPRITE, x, y);
-        if (e != null) stackOn(g, e.getItemBySlot(slot), x, y, mouseX, mouseY);
-    }
-
     // ---- chat transcript + plan ----
 
-    private void renderChat(GuiGraphics g) {
+    /** 头部右侧(tab 左边)的上下文水位+累计消耗。恒定淡色——这是信息不是警报,
+     *  临近水位线会自动压缩,不需要玩家做任何事。返回文字左边界,标题据此让位。 */
+    private int renderUsage(GuiGraphics g, int mouseX, int mouseY) {
+        int pct = loop().contextPercent();
+        long total = loop().totalTokensUsed();
+        if (pct <= 0 && total <= 0) return tabX[0];
+        String s = (pct > 0 ? "context " + pct + "%" : "")
+                + (pct > 0 && total > 0 ? " · " : "")
+                + (total > 0 ? fmtTokens(total) + " tokens" : "");
+        int tx = tabX[0] - 10 - font.width(s);
+        txt(g, Component.literal(s), tx, top + 7, TXT_FAINT);
+        if (mouseX >= tx && mouseX < tabX[0] - 10 && mouseY >= top + 5 && mouseY < top + 17) {
+            g.setComponentTooltipForNextFrame(font, List.of(
+                    Component.translatable("numen.chat.usage_tip.context"),
+                    Component.translatable("numen.chat.usage_tip.tokens"),
+                    Component.translatable("numen.chat.usage_tip.cache")), mouseX, mouseY);
+        }
+        return tx;
+    }
+
+    private void renderChat(GuiGraphics g, int mouseX, int mouseY) {
         int bodyY = top + HEADER_H + 4;
-        int bodyBottom = top + PANEL_H - INPUT_H - PAD - 6;
+        int bodyBottom = top + panelH - INPUT_H - PAD - 6;
         int transX = left + PAD;
-        int transW = PANEL_W - PAD * 2 - PLAN_W - 8;
-        int viewH = bodyBottom - bodyY;
+        int transW = panelW - PAD * 2 - PLAN_W - 8;
 
-        // plan panel divider + content
+        // right-side PLAN card + the bubble transcript
         int planX = transX + transW + 8;
-        g.fill(planX - 4, bodyY, planX - 3, bodyBottom, BORDER);
-        renderPlan(g, planX, bodyY, bodyBottom);
+        com.dwinovo.numen.client.screen.chat.PlanCard.render(
+                g, font, loop(), planX - 4, bodyY, PLAN_W + 4, bodyBottom);
+        chatView.render(g, transX, bodyY, transW, bodyBottom - bodyY);
 
-        List<Row> rows = buildRows(transW);
-        int contentH = rows.size() * LINE_H;
-        lastMaxScroll = Math.max(0, contentH - viewH);
-        if (pinBottom) scroll = lastMaxScroll;
-        scroll = Math.clamp((long) scroll, 0, lastMaxScroll);
-
-        g.enableScissor(transX, bodyY, transX + transW, bodyBottom);
-        int y = bodyY - scroll;
-        long t = System.currentTimeMillis();
-        Set<String> done = doneIds();
-        Set<String> failed = failedIds();
-        for (Row row : rows) {
-            if (y + LINE_H > bodyY && y < bodyBottom) {
-                if (row.foldKey() != null) {                 // clickable fold toggle — glyph baked into text
-                    txt(g, row.text, transX, y, row.color);
-                } else if (row.toolIds() != null) {          // tool row — status icon + text
-                    boolean anyRunning = row.toolIds().stream().anyMatch(id -> !done.contains(id));
-                    boolean anyFail = row.toolIds().stream().anyMatch(failed::contains);
-                    String icon = anyRunning ? SPIN[(int) ((t / 120) % 4)] : (anyFail ? "✗" : "✔");
-                    int ic = anyRunning ? RUN : (anyFail ? FAIL : OK);
-                    txt(g, Component.literal(icon), transX, y, ic);
-                    txt(g, row.text, transX + 11, y, row.color);
-                } else {
-                    txt(g, row.text, transX, y, row.color);
-                }
-            }
-            y += LINE_H;
+        boolean noticeLive = micNotice != null && micNoticeUntil > System.currentTimeMillis();
+        if (!noticeLive && micNoticeUntil != 0) {   // 过期一次性复位:把醒目 hint 换回正常的淡色占位
+            micNoticeUntil = 0;
+            micNotice = null;
+            if (input != null) input.setHint(defaultChatHint());
         }
-        g.disableScissor();
-
-        // scrollbar — Cottage track + thumb sprites (was off-theme white fills)
-        if (lastMaxScroll > 0) {
-            int trackH = viewH;
-            int thumbH = Math.max(12, trackH * viewH / (viewH + lastMaxScroll));
-            int thumbY = bodyY + (trackH - thumbH) * scroll / lastMaxScroll;
-            int sbX = transX + transW - 4;
-            g.blitSprite(net.minecraft.client.renderer.RenderPipelines.GUI_TEXTURED, SCROLL_TRACK, sbX, bodyY, 4, viewH);
-            g.blitSprite(net.minecraft.client.renderer.RenderPipelines.GUI_TEXTURED, SCROLL_THUMB, sbX, thumbY, 4, thumbH);
+        // 框里已有文字时 hint 不显示,这条兜底行接管(用醒目的 FAIL 色,不再是淡 ACCENT)
+        if (noticeLive && input != null && !input.getValue().isEmpty()) {
+            txt(g, Component.literal(micNotice), left + PAD, top + panelH - INPUT_H - PAD - 11, FAIL);
         }
     }
-
-    /** Flatten the convo into render rows. Tool RESULT messages aren't drawn — they only mark the
-     *  matching tool call done (via {@link #doneIds()}); the call line shows the spinner/check. */
-    private List<Row> buildRows(int width) {
-        List<Row> out = new ArrayList<>();
-        Set<String> done = doneIds();
-        Set<String> failed = failedIds();
-        List<LlmToolCall> group = new ArrayList<>();        // a run of consecutive tool calls
-        for (ConvoState.Msg msg : loop().convo().snapshot()) {
-            switch (msg) {
-                case ConvoState.Msg.User u -> {
-                    flushTools(out, group, done, failed, width);
-                    wrapPlain(out, u.content(), YOU, width);     // user = teal body, no label
-                }
-                case ConvoState.Msg.Assistant a -> {
-                    AssistantTurn turn = a.turn();
-                    if (turn.content() != null && !turn.content().isBlank()) {
-                        flushTools(out, group, done, failed, width);   // spoken reply breaks the fold
-                        addHeader(out, name, AI, width);         // bold name header on its OWN line
-                        wrapPlain(out, turn.content(), AI, width);
-                    }
-                    group.addAll(turn.toolCalls());
-                }
-                case ConvoState.Msg.Tool ignored -> { /* result drives done/fail, not a row */ }
-            }
-        }
-        flushTools(out, group, done, failed, width);
-        if (loop().isCompacting()) {
-            wrapPlain(out, "compacting history…", TXT_MUTED, width);
-        }
-        if (out.isEmpty()) {
-            wrapPlain(out, "Say something to " + name + ".", TXT_FAINT, width);
-        }
-        return out;
-    }
-
-    /** Emit rows for a run of consecutive tool calls. A single call is always one plain row. A run of
-     *  many stays EXPANDED while any is still running (live per-tool spinners) and AUTO-FOLDS to a muted
-     *  "N steps · names" summary once all are done — unless the user clicked it open (keyed by the first
-     *  id in {@link #expandedGroups}), in which case it shows a "▾" header + the tool rows. */
-    private void flushTools(List<Row> out, List<LlmToolCall> group, Set<String> done, Set<String> failed, int width) {
-        if (group.isEmpty()) return;
-        if (group.size() == 1) {                                  // single tool — never folds
-            addToolRow(out, group.get(0), width);
-            group.clear();
-            return;
-        }
-        String key = group.get(0).id();
-        boolean running = group.stream().anyMatch(tc -> !done.contains(tc.id()));
-        boolean expanded = running || expandedGroups.contains(key);
-        if (!expanded) {                                          // folded summary (click to expand)
-            List<String> names = new ArrayList<>();
-            for (LlmToolCall tc : group) if (!names.contains(tc.name())) names.add(tc.name());
-            boolean anyFail = group.stream().anyMatch(tc -> failed.contains(tc.id()));
-            String summary = "▸ " + group.size() + " steps · " + String.join(" · ", names);
-            out.add(new Row(colored(fitOneLine(summary, width - 2), anyFail ? FAIL : TOOL).getVisualOrderText(),
-                    anyFail ? FAIL : TOOL, null, key));
-        } else {
-            if (!running) {                                       // manually expanded → collapsible header
-                String hdr = "▾ " + group.size() + " steps";
-                out.add(new Row(colored(hdr, TXT_MUTED).getVisualOrderText(), TXT_MUTED, null, key));
-            }
-            for (LlmToolCall tc : group) addToolRow(out, tc, width);
-        }
-        group.clear();
-    }
-
-    private void addToolRow(List<Row> out, LlmToolCall tc, int width) {
-        FormattedCharSequence seq = colored(fitOneLine(toolLine(tc), width - 2 - 11), TOOL).getVisualOrderText();
-        out.add(new Row(seq, TOOL, List.of(tc.id()), null));
-    }
-
-    /** Trim a string with an ellipsis so it fits one line of the given pixel width. */
-    private String fitOneLine(String s, int pxWidth) {
-        if (font.width(s) <= pxWidth) return s;
-        while (s.length() > 1 && font.width(s + "…") > pxWidth) s = s.substring(0, s.length() - 1);
-        return s + "…";
-    }
-
-    private String toolLine(LlmToolCall tc) {
-        String args = tc.arguments() == null ? "" : tc.arguments().replaceAll("\\s+", " ").trim();
-        if (args.length() > TOOL_ARG_CHARS) args = args.substring(0, TOOL_ARG_CHARS) + "…";
-        return tc.name() + "  " + args;
-    }
-
-    /** A bold name header on its OWN line (fixed format — never merges into the body). */
-    private void addHeader(List<Row> out, String label, int color, int width) {
-        var tc = net.minecraft.network.chat.TextColor.fromRgb(color & 0xFFFFFF);
-        Component c = Component.literal(label).withStyle(s -> s.withColor(tc).withBold(true));
-        for (FormattedCharSequence seq : font.split(c, width - 2)) {
-            out.add(new Row(seq, color, null, null));
-        }
-    }
-
-    /** A plain, regular-weight line (status hints) — colour baked into the style. */
-    private void wrapPlain(List<Row> out, String text, int color, int width) {
-        for (FormattedCharSequence seq : font.split(colored(text, color), width - 2)) {
-            out.add(new Row(seq, color, null, null));
-        }
-    }
-
-    private Set<String> doneIds() {
-        Set<String> s = new HashSet<>();
-        for (ConvoState.Msg m : loop().convo().snapshot()) {
-            if (m instanceof ConvoState.Msg.Tool t) s.add(t.toolCallId());
-        }
-        return s;
-    }
-
-    private Set<String> failedIds() {
-        Set<String> s = new HashSet<>();
-        for (ConvoState.Msg m : loop().convo().snapshot()) {
-            if (m instanceof ConvoState.Msg.Tool t && looksFailed(t.content())) s.add(t.toolCallId());
-        }
-        return s;
-    }
-
-    private static boolean looksFailed(String content) {
-        if (content == null) return false;
-        String c = content.replaceAll("\\s+", "");
-        return c.contains("\"success\":false") || c.startsWith("ERROR") || c.contains("\"error\"");
-    }
-
-    /** Right-side PLAN panel: the companion's latest {@code todowrite}, with status glyphs. */
-    private void renderPlan(GuiGraphics g, int x, int y, int bottom) {
-        txt(g, Component.literal("PLAN"), x, y, TXT_MUTED);
-        int ly = y + 13;
-        JsonArray todos = latestPlan();
-        if (todos == null || todos.isEmpty()) {
-            txt(g, Component.literal("no plan yet"), x, ly, TXT_FAINT);
-            return;
-        }
-        for (int i = 0; i < todos.size() && ly + LINE_H < bottom; i++) {
-            if (!todos.get(i).isJsonObject()) continue;
-            JsonObject it = todos.get(i).getAsJsonObject();
-            String status = str(it, "status");
-            String content = str(it, "content");
-            String glyph = switch (status) { case "completed" -> "✔"; case "in_progress" -> "▸"; default -> "○"; };
-            int color = switch (status) { case "completed" -> OK; case "in_progress" -> RUN; default -> TXT_FAINT; };
-            txt(g, Component.literal(glyph), x, ly, color);
-            // text hierarchy: in-progress = strong (current focus), completed = recede, pending = faint
-            int textColor = switch (status) {
-                case "in_progress" -> TXT;
-                case "completed" -> TXT_MUTED;
-                default -> TXT_FAINT;
-            };
-            List<FormattedCharSequence> lines = font.split(colored(content, textColor), PLAN_W - 14);
-            int sub = 0;
-            for (FormattedCharSequence seq : lines) {
-                if (ly + LINE_H >= bottom) break;
-                txt(g, seq, x + 10, ly, textColor);
-                ly += LINE_H;
-                if (++sub >= 2) break;   // cap each item at 2 lines
-            }
-            if (lines.isEmpty()) ly += LINE_H;
-        }
-    }
-
-    /** Parse the most recent todowrite call's todos array, or null. */
-    private JsonArray latestPlan() {
-        JsonArray latest = null;
-        for (ConvoState.Msg m : loop().convo().snapshot()) {
-            if (m instanceof ConvoState.Msg.Assistant a) {
-                for (LlmToolCall tc : a.turn().toolCalls()) {
-                    if (!"todowrite".equals(tc.name())) continue;
-                    try {
-                        JsonObject args = JsonParser.parseString(tc.arguments()).getAsJsonObject();
-                        if (args.has("todos") && args.get("todos").isJsonArray()) {
-                            latest = args.getAsJsonArray("todos");
-                        }
-                    } catch (RuntimeException ignored) { /* keep the last good one */ }
-                }
-            }
-        }
-        return latest;
-    }
-
-    private static String str(JsonObject o, String k) {
-        return o.has(k) && !o.get(k).isJsonNull() ? o.get(k).getAsString() : "";
-    }
-
-    /** The Items tab: a vanilla-inventory-style "companion sheet" — armor column + offhand, a live
-     *  mouse-following portrait, the synced 2×2 craft grid + result, segmented heart/drumstick vitals,
-     *  and the read-only checkerboard 3×9 storage + hotbar. Body data is fetched on demand via
-     *  RequestInventoryPayload (backpack + craft + food); HP + equipment come off the live client entity. */
-    private void renderItems(GuiGraphics g, int mouseX, int mouseY) {
-        var snap = ClientNumenInventory.get(uuid).orElse(null);
-        AbstractClientPlayer e = ClientNumenLookup.resolve(uuid);
-        List<ItemStack> craft = snap != null ? snap.craft() : List.of();
-
-        // Two centred columns: LEFT = big portrait + armor column + offhand; RIGHT = craft + vitals +
-        // 3×9 storage + hotbar. Symmetric framing margins (no lopsided whitespace).
-        final int STORAGE_W = 9 * 18;                     // 162 — the widest element (caps the band)
-        final int COMP_W = 130 + STORAGE_W;               // left col (130) + right col (storage)
-        final int COMP_H = 152;
-        int startX = left + (PANEL_W - COMP_W) / 2;
-        int cTop = top + HEADER_H + (PANEL_H - HEADER_H - COMP_H) / 2;
-        int rightX = startX + 130;
-
-        // -- LEFT: portrait socket, armor column + offhand (vertically centred against the portrait) --
-        renderPortrait(g, e, startX + 22, cTop, 84, COMP_H, mouseX, mouseY);
-        int armorTop = cTop + (COMP_H - 5 * 18) / 2;
-        for (int i = 0; i < ARMOR.length; i++) {
-            drawEquip(g, e, ARMOR[i], startX, armorTop + i * 18, mouseX, mouseY);
-        }
-        drawEquip(g, e, EquipmentSlot.OFFHAND, startX, armorTop + 4 * 18, mouseX, mouseY);
-
-        // -- RIGHT top: synced 2×2 craft grid (+ arrow + result) --
-        for (int i = 0; i < 4; i++) {
-            int cx = rightX + (i % 2) * 18, cy = cTop + (i / 2) * 18;
-            slotBg(g, SLOT_SPRITE, cx, cy);
-            stackOn(g, i < craft.size() ? craft.get(i) : ItemStack.EMPTY, cx, cy, mouseX, mouseY);
-        }
-        txt(g, Component.literal("→"), rightX + 38, cTop + 13, TXT_MUTED);
-        int resultX = rightX + 54, resultY = cTop + 9;
-        slotBg(g, SLOT_SPRITE, resultX, resultY);
-        stackOn(g, craft.size() > 4 ? craft.get(4) : ItemStack.EMPTY, resultX, resultY, mouseX, mouseY);
-
-        // -- RIGHT mid: segmented hearts + drumsticks --
-        if (e != null) renderStatRow(g, rightX, cTop + 46, e.getHealth(), e.getMaxHealth(),
-                HEART_FULL, HEART_HALF, HEART_EMPTY);
-        int food = (snap != null && snap.loaded()) ? snap.foodLevel() : 0;
-        renderStatRow(g, rightX, cTop + 46 + ICON + 2, food, 20, FOOD_FULL, FOOD_HALF, FOOD_EMPTY);
-
-        // -- RIGHT bottom: checkerboard 3×9 storage + hotbar --
-        int storeY = cTop + 74;
-        if (snap == null) {
-            txt(g, Component.literal("loading…"), rightX, storeY + 4, TXT_FAINT);
-            return;
-        }
-        if (!snap.loaded() || snap.items().isEmpty()) {
-            txt(g, Component.literal("asleep — chat to wake it."), rightX, storeY + 4, TXT_FAINT);
-            return;
-        }
-        List<ItemStack> items = snap.items();
-        for (int i = 9; i < 36; i++) {                     // storage rows (slots 9..35)
-            int col = (i - 9) % 9, row = (i - 9) / 9;
-            int x = rightX + col * 18, y = storeY + row * 18;
-            slotBg(g, ((col + row) & 1) == 0 ? SLOT_SPRITE : SLOT_ALT, x, y);
-            stackOn(g, items.get(i), x, y, mouseX, mouseY);
-        }
-        int hotbarY = storeY + 3 * 18 + 6;                 // hotbar (slots 0..8)
-        for (int i = 0; i < 9; i++) {
-            int x = rightX + i * 18;
-            slotBg(g, (i & 1) == 0 ? SLOT_SPRITE : SLOT_ALT, x, hotbarY);
-            stackOn(g, items.get(i), x, hotbarY, mouseX, mouseY);
-        }
-    }
-
-    private static net.minecraft.resources.Identifier spr(String name) {
-        return net.minecraft.resources.Identifier.fromNamespaceAndPath(com.dwinovo.numen.Constants.MOD_ID, name);
-    }
-    private static final net.minecraft.resources.Identifier SLOT_SPRITE = spr("slot");
-    private static final net.minecraft.resources.Identifier SLOT_ALT = spr("slot_alt");        // checkerboard
-    /** Parchment frame (reuses the button sprite) behind text fields. */
-    private static final net.minecraft.resources.Identifier FIELD_SPRITE = spr("button");
-    private static final net.minecraft.resources.Identifier HEART_FULL = spr("heart_full");
-    private static final net.minecraft.resources.Identifier HEART_HALF = spr("heart_half");
-    private static final net.minecraft.resources.Identifier HEART_EMPTY = spr("heart_empty");
-    private static final net.minecraft.resources.Identifier FOOD_FULL = spr("food_full");
-    private static final net.minecraft.resources.Identifier FOOD_HALF = spr("food_half");
-    private static final net.minecraft.resources.Identifier FOOD_EMPTY = spr("food_empty");
-    private static final net.minecraft.resources.Identifier SCROLL_TRACK = spr("scroll_track");
-    private static final net.minecraft.resources.Identifier SCROLL_THUMB = spr("scroll_thumb");
 
     @Override
     public boolean isPauseScreen() {
         return false;
     }
 
-    /** A rendered transcript line. {@code toolIds} non-null = a tool row (status icon = spinner/✔/✗).
-     *  {@code foldKey} non-null = a clickable fold toggle (the group's first id); both null = plain text. */
-    private record Row(FormattedCharSequence text, int color, List<String> toolIds, String foldKey) {}
 }

@@ -37,16 +37,41 @@ public final class Companions {
      */
     public static NumenPlayer summon(MinecraftServer server, UUID ownerUuid, String name,
                                       ServerLevel level, Vec3 pos) {
+        return summon(server, ownerUuid, name, level, pos, null);
+    }
+
+    /** As {@link #summon(MinecraftServer, UUID, String, ServerLevel, Vec3)} with an optional
+     *  borrowed skin (Mojang 签名的 textures,见 {@link MojangSkins})。重复召唤携带皮肤 =
+     *  换肤:注册表更新后,休眠体这次重建就生效,活体等下次重建。 */
+    public static NumenPlayer summon(MinecraftServer server, UUID ownerUuid, String name,
+                                      ServerLevel level, Vec3 pos, MojangSkins.Skin skin) {
+        CompanionRegistry reg = CompanionRegistry.get(server);
         UUID existing = findByOwnerName(server, ownerUuid, name);
         if (existing != null) {
+            if (skin != null) {
+                CompanionRegistry.Entry e = reg.find(existing);
+                if (e != null) reg.put(existing, e.withSkin(skin.value(), skin.signature()));
+                // 换肤必须重建身体才看得见(GameProfile 只在构造时注入):活体先落盘
+                // 休眠,紧接着的 respawn 立即以带新皮肤的档案重建,位置物品全保留。
+                NumenPlayer live = NumenPlayer.findByUuid(server, existing);
+                if (live != null) {
+                    CompanionFactory.despawn(server, live);
+                }
+            }
             NumenPlayer body = respawn(server, existing);
             if (body != null) return body;
-            CompanionRegistry.get(server).remove(existing);   // stale entry (no .dat) — replace it
+            reg.remove(existing);   // stale entry (no .dat) — replace it
         }
         UUID companionUuid = UUID.randomUUID();
+        Vec3 safe = SafeSpawn.findNear(level, pos);
+        if (safe != null) pos = safe;   // no safe spot around → keep the summoner's own position
+        // 先入册再造体:CompanionFactory.spawn 从注册表读皮肤,所有出生路径共用一个注入点。
+        CompanionRegistry.Entry fresh = new CompanionRegistry.Entry(
+                name, ownerUuid, level.dimension(), net.minecraft.core.BlockPos.containing(pos));
+        if (skin != null) fresh = fresh.withSkin(skin.value(), skin.signature());
+        reg.put(companionUuid, fresh);
         NumenPlayer body = CompanionFactory.spawn(server, companionUuid, name, ownerUuid, level, pos);
-        CompanionRegistry.get(server).put(companionUuid,
-                new CompanionRegistry.Entry(name, ownerUuid, level.dimension(), body.blockPosition()));
+        reg.put(companionUuid, fresh.movedTo(level.dimension(), body.blockPosition()));
         return body;
     }
 
@@ -127,21 +152,33 @@ public final class Companions {
             if (now - entry.diedAt() < RESPAWN_DELAY_TICKS) continue;
             ServerPlayer owner = server.getPlayerList().getPlayer(entry.owner());
             if (owner == null) continue;                            // owner offline — wait for login
+            // No safe spot right now → quietly retry next tick until the owner reaches open
+            // space (the maid/vanilla-pet convention: never nag about a transient squeeze).
             respawnDead(server, e.getKey(), entry, owner);
         }
     }
 
     /** Respawn a dead companion at its owner, clear the death state, and tell the brain it died + why
-     *  (the cause rides the respawn payload, so it works even after a logout cleared the client's memory). */
-    private static void respawnDead(MinecraftServer server, UUID uuid, CompanionRegistry.Entry entry,
-                                    ServerPlayer owner) {
+     *  (the cause rides the respawn payload, so it works even after a logout cleared the client's memory).
+     *  Returns false when no safe landing spot exists near the owner right now (tight tunnel, crawling,
+     *  deep water) — the death state stays pending and the ticker retries until the owner reaches open
+     *  space. Spawning anyway wedged the body into blocks: suffocate → die → respawn into the same spot,
+     *  a death loop until the owner happened to move. */
+    private static boolean respawnDead(MinecraftServer server, UUID uuid, CompanionRegistry.Entry entry,
+                                       ServerPlayer owner) {
         ServerLevel level = (ServerLevel) owner.level();
-        NumenPlayer body = CompanionFactory.spawn(server, uuid, entry.name(), entry.owner(), level, owner.position());
+        Vec3 pos = SafeSpawn.findNear(level, owner.position());
+        if (pos == null && owner.onGround() && SafeSpawn.hasStandingRoom(level, owner.position())) {
+            pos = owner.position();   // non-full-block floor (slab/carpet): the owner's own spot fits
+        }
+        if (pos == null) return false;
+        NumenPlayer body = CompanionFactory.spawn(server, uuid, entry.name(), entry.owner(), level, pos);
         body.setHealth(body.getMaxHealth());
         body.clearFire();
         CompanionRegistry.get(server).markAlive(uuid);
         syncRosterToOwner(server, owner);
         Services.NETWORK.sendToPlayer(owner, new NumenRespawnPayload(uuid, entry.deathCause()));
+        return true;
     }
 
     /**
@@ -165,13 +202,19 @@ public final class Companions {
 
     /**
      * Push an async world {@code <event>} to the companion's brain (it runs on the owner's client).
-     * {@code urgent} wakes an idle brain to react now; otherwise it rides along on the next owner turn.
+     * Consumption timing is the client inbox's business — it routes by the brain's state at arrival
+     * (mid-turn → next boundary; background task running → immediate turn; idle → wait and ride).
      * No-op if the owner is offline (no client to receive it).
+     *
+     * <p>{@code principal} means "a live HUMAN is speaking through this event" — bridge mods relaying
+     * danmaku / QQ messages set it true and get owner-grade treatment (opens a turn even from full
+     * idle). World/body events (task wind-downs, dimension changes, body narrative) always pass
+     * false: they are facts, and facts don't get to decide their own urgency.
      */
-    public static void emitEvent(NumenPlayer body, String xml, boolean urgent) {
+    public static void emitEvent(NumenPlayer body, String xml, boolean principal) {
         ServerPlayer owner = body.resolveOwnerPlayer();
         if (owner != null) {
-            Services.NETWORK.sendToPlayer(owner, new NumenEventPayload(body.getUUID(), xml, urgent));
+            Services.NETWORK.sendToPlayer(owner, new NumenEventPayload(body.getUUID(), xml, principal));
         }
     }
 
@@ -181,9 +224,11 @@ public final class Companions {
      * spending a fresh LLM call just to note the move. Called from each loader's dimension-change hook.
      */
     public static void onDimensionChanged(NumenPlayer body) {
-        String dim = body.level().dimension().identifier().toString();
-        emitEvent(body, "<event kind=\"dimension_change\" to=\"" + dim + "\">你进入了 " + dim
-                + "。留意这个维度的环境和危险。</event>", false);
+        String dim = body.level().dimension().location().toString();
+        com.dwinovo.numen.event.GameEvents.emit(body,
+                com.dwinovo.numen.event.GameEvents.Kind.DIMENSION_CHANGE,
+                java.util.Map.of("to", dim),
+                "你进入了 " + dim + "。留意这个维度的环境和危险。");
     }
 
     /** Save the companion to its {@code .dat} and remove it from the world (dormancy). */
@@ -192,9 +237,8 @@ public final class Companions {
         CompanionRegistry reg = CompanionRegistry.get(server);
         CompanionRegistry.Entry prev = reg.find(body.getUUID());
         if (prev != null) {
-            reg.put(body.getUUID(), new CompanionRegistry.Entry(
-                    prev.name(), prev.owner(),
-                    ((ServerLevel) body.level()).dimension(), body.blockPosition()));
+            reg.put(body.getUUID(),
+                    prev.movedTo(((ServerLevel) body.level()).dimension(), body.blockPosition()));
         }
         CompanionFactory.despawn(server, body);
     }

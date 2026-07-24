@@ -157,6 +157,9 @@ public final class FabricNumenConfig implements INumenConfig {
     @Override
     public String getProxy() { return data.proxy == null ? "" : data.proxy; }
 
+    @Override
+    public String getReasoningEffort() { return data.reasoningEffort == null ? "auto" : data.reasoningEffort; }
+
     // ---- mutations ----
 
     @Override
@@ -175,7 +178,40 @@ public final class FabricNumenConfig implements INumenConfig {
     public void setProxy(String value) { data.proxy = value == null ? "" : value; }
 
     @Override
+    public void setReasoningEffort(String value) { data.reasoningEffort = value == null ? "auto" : value; }
+
+    @Override
     public void setSystemPrompt(String value) { data.systemPrompt = value == null ? "" : value; }
+
+    @Override
+    public String getSttProvider() { return data.sttProvider == null || data.sttProvider.isBlank() ? "siliconflow" : data.sttProvider; }
+
+    @Override
+    public String getSttApiKey() { return data.sttApiKey == null ? "" : data.sttApiKey; }
+
+    @Override
+    public String getSttBaseUrl() { return data.sttBaseUrl == null ? "" : data.sttBaseUrl; }
+
+    @Override
+    public String getSttModel() { return data.sttModel == null ? "" : data.sttModel; }
+
+    @Override
+    public String getSttMicrophone() { return data.sttMicrophone == null ? "" : data.sttMicrophone; }
+
+    @Override
+    public void setSttProvider(String value) { data.sttProvider = value == null || value.isBlank() ? "siliconflow" : value; }
+
+    @Override
+    public void setSttApiKey(String value) { data.sttApiKey = value == null ? "" : value; }
+
+    @Override
+    public void setSttBaseUrl(String value) { data.sttBaseUrl = value == null ? "" : value; }
+
+    @Override
+    public void setSttModel(String value) { data.sttModel = value == null ? "" : value; }
+
+    @Override
+    public void setSttMicrophone(String value) { data.sttMicrophone = value == null ? "" : value; }
 
     @Override
     public void save() {
@@ -209,6 +245,13 @@ public final class FabricNumenConfig implements INumenConfig {
         public String model = "gpt-5-2-mini";
         public String provider = "openai";
         public String proxy = "";   // optional host:port HTTP proxy for LLM calls
+        public String reasoningEffort = "auto";   // auto | low | medium | high (reasoning-capable models)
+        // STT (voice input) — global. provider picks the preset; empty apiKey = disabled.
+        public String sttProvider = "siliconflow";
+        public String sttApiKey = "";
+        public String sttBaseUrl = "";
+        public String sttModel = "FunAudioLLM/SenseVoiceSmall";
+        public String sttMicrophone = "";
         // Deliberately short. The planning behaviour (use todowrite for
         // multi-step tasks, load_skill to fetch detailed workflows) emerges
         // entirely from those tools' own descriptions plus the runtime-injected
@@ -228,7 +271,13 @@ public final class FabricNumenConfig implements INumenConfig {
             if (model == null || model.isBlank()) model = d.model;
             if (provider == null || provider.isBlank()) provider = d.provider;
             if (proxy == null) proxy = d.proxy;
+            if (reasoningEffort == null || reasoningEffort.isBlank()) reasoningEffort = d.reasoningEffort;
             if (systemPrompt == null) systemPrompt = d.systemPrompt;
+            if (sttProvider == null || sttProvider.isBlank()) sttProvider = d.sttProvider;
+            if (sttApiKey == null) sttApiKey = d.sttApiKey;
+            if (sttBaseUrl == null) sttBaseUrl = d.sttBaseUrl;
+            if (sttModel == null) sttModel = d.sttModel;
+            if (sttMicrophone == null) sttMicrophone = d.sttMicrophone;
             return this;
         }
     }

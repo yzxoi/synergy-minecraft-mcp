@@ -1,12 +1,14 @@
 package com.dwinovo.numen;
 
 import com.dwinovo.numen.agent.skill.SkillRegistry;
+import com.dwinovo.numen.mcp.client.McpClientManager;
 import net.fabricmc.api.ClientModInitializer;
+import net.fabricmc.loader.api.FabricLoader;
 import net.fabricmc.fabric.api.client.keybinding.v1.KeyBindingHelper;
 import net.fabricmc.fabric.api.resource.ResourceManagerHelper;
 import net.fabricmc.fabric.api.resource.SimpleSynchronousResourceReloadListener;
 import net.minecraft.client.Minecraft;
-import net.minecraft.resources.Identifier;
+import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.packs.PackType;
 import net.minecraft.server.packs.resources.ResourceManager;
 
@@ -20,14 +22,28 @@ public class NumenFabricClient implements ClientModInitializer {
                 .resolve("config").resolve(Constants.MOD_ID);
         Path skillsDir = numenConfigRoot.resolve("skills");
 
+        // 读回上次选择的 GUI 主题(config/numen/ui.json)。
+        com.dwinovo.numen.client.screen.UiTheme.init(
+                Minecraft.getInstance().gameDirectory.toPath().resolve("config").resolve("numen"));
+
+        // MCP client: connect to any external MCP servers listed in
+        // config/numen/mcp_clients.json and register their tools so the built-in
+        // brain can call them. Config dir from the loader (avoids Minecraft timing).
+        McpClientManager.initClient(FabricLoader.getInstance().getConfigDir().resolve(Constants.MOD_ID));
+
+        // MCP server: the other direction — stand up a loopback MCP server so an
+        // external agent can drive companions directly, bypassing the built-in brain.
+        // Off unless enabled in config/numen/mcp_server.json.
+        com.dwinovo.numen.mcp.server.NumenMcp.initClient(FabricLoader.getInstance().getConfigDir());
+
         // Skills live under config/numen/skills. Hook the resource reload
         // pipeline so /reload picks up newly added SKILL.md files without a
         // client restart.
-        Identifier skillLoaderId = Identifier.fromNamespaceAndPath(Constants.MOD_ID, "skill_loader");
+        ResourceLocation skillLoaderId = ResourceLocation.fromNamespaceAndPath(Constants.MOD_ID, "skill_loader");
         ResourceManagerHelper.get(PackType.CLIENT_RESOURCES)
                 .registerReloadListener(new SimpleSynchronousResourceReloadListener() {
                     @Override
-                    public Identifier getFabricId() {
+                    public ResourceLocation getFabricId() {
                         return skillLoaderId;
                     }
 
@@ -38,8 +54,10 @@ public class NumenFabricClient implements ClientModInitializer {
                         SkillRegistry.instance().scan(skillsDir);
                     }
                 });
+        // GUI 圆角 SDF shader:1.21.4 的 ShaderManager 自动扫描编译资源树里的全部
+        // shader 配置,fabric 侧无需(也已无)注册 API——RoundRect 按键查表即可。
 
-        // G → companion roster panel (chat entry + settings/reset live in there).
+        // N → companion roster panel (chat entry + settings/reset live in there).
         KeyBindingHelper.registerKeyBinding(com.dwinovo.numen.client.NumenKeys.OPEN_ROSTER);
         net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents.END_CLIENT_TICK
                 .register(client -> {
@@ -53,19 +71,25 @@ public class NumenFabricClient implements ClientModInitializer {
         net.fabricmc.fabric.api.client.rendering.v1.HudRenderCallback.EVENT.register(
                 (g, delta) -> com.dwinovo.numen.client.hud.NumenToasts.render(g));
 
-        // In-world path overlay for every companion (Baritone PathRenderer port),
-        // drawn after translucent terrain so it sits over the world.
-        net.fabricmc.fabric.api.client.rendering.v1.world.WorldRenderEvents.AFTER_ENTITIES
-                .register(ctx -> com.dwinovo.numen.client.path.PathVizRenderer.render(ctx.matrices()));
-
-        // Drop every path overlay on disconnect so a frozen path can't survive a
-        // relog (the server can't send a clear to a player who's already gone).
         net.fabricmc.fabric.api.client.networking.v1.ClientPlayConnectionEvents.DISCONNECT
                 .register((handler, client) -> {
-                    com.dwinovo.numen.client.path.ClientPathViz.clearAll();
                     com.dwinovo.numen.client.data.ClientNumenInventory.clear();
+                    com.dwinovo.numen.client.agent.KnownSkins.clear();
                     com.dwinovo.numen.client.hud.NumenToasts.clear();
                     com.dwinovo.numen.client.agent.ClientDeaths.clearAll();
+                    com.dwinovo.numen.client.debug.PathDebugState.clear();
+                });
+
+        // 寻路调试覆盖层:世界空间画线。1.21.10 fabric-api 把事件挪进 rendering.v1.world
+        // 包并撤掉了 AFTER_TRANSLUCENT/ctx.camera():挂 BEFORE_DEBUG_RENDER(原版调试线
+        // 的绘制点,语义一致),相机改走 gameRenderer.getMainCamera()。
+        net.fabricmc.fabric.api.client.rendering.v1.world.WorldRenderEvents.BEFORE_DEBUG_RENDER
+                .register(context -> {
+                    if (context.matrices() != null) {
+                        com.dwinovo.numen.client.debug.PathDebugRenderer.render(
+                                context.matrices(),
+                                Minecraft.getInstance().gameRenderer.getMainCamera());
+                    }
                 });
     }
 }
