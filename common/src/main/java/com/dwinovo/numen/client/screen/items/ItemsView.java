@@ -9,7 +9,7 @@ import net.minecraft.client.gui.Font;
 import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.player.AbstractClientPlayer;
 import net.minecraft.client.resources.language.I18n;
-import net.minecraft.resources.ResourceLocation;
+import net.minecraft.resources.Identifier;
 import net.minecraft.world.entity.EquipmentSlot;
 import net.minecraft.world.item.ItemStack;
 
@@ -31,17 +31,17 @@ public final class ItemsView {
     private static final EquipmentSlot[] ARMOR = {
             EquipmentSlot.HEAD, EquipmentSlot.CHEST, EquipmentSlot.LEGS, EquipmentSlot.FEET};
 
-    private static ResourceLocation spr(String name) {
-        return ResourceLocation.fromNamespaceAndPath(Constants.MOD_ID, name);
+    private static Identifier spr(String name) {
+        return Identifier.fromNamespaceAndPath(Constants.MOD_ID, name);
     }
-    private static final ResourceLocation SLOT_SPRITE = spr("slot");
-    private static final ResourceLocation SLOT_ALT = spr("slot_alt");        // checkerboard
-    private static final ResourceLocation HEART_FULL = spr("heart_full");
-    private static final ResourceLocation HEART_HALF = spr("heart_half");
-    private static final ResourceLocation HEART_EMPTY = spr("heart_empty");
-    private static final ResourceLocation FOOD_FULL = spr("food_full");
-    private static final ResourceLocation FOOD_HALF = spr("food_half");
-    private static final ResourceLocation FOOD_EMPTY = spr("food_empty");
+    private static final Identifier SLOT_SPRITE = spr("slot");
+    private static final Identifier SLOT_ALT = spr("slot_alt");        // checkerboard
+    private static final Identifier HEART_FULL = spr("heart_full");
+    private static final Identifier HEART_HALF = spr("heart_half");
+    private static final Identifier HEART_EMPTY = spr("heart_empty");
+    private static final Identifier FOOD_FULL = spr("food_full");
+    private static final Identifier FOOD_HALF = spr("food_half");
+    private static final Identifier FOOD_EMPTY = spr("food_empty");
 
     private ItemsView() {}
 
@@ -115,7 +115,7 @@ public final class ItemsView {
     /** A row of segmented icons for a 0..max stat (2 units per icon): empty sockets first, then
      *  full / half overlaid. Used for hearts (HP) and drumsticks (hunger). */
     private static void renderStatRow(GuiGraphics g, int x, int y, float value, float max,
-                                      ResourceLocation full, ResourceLocation half, ResourceLocation empty) {
+                                      Identifier full, Identifier half, Identifier empty) {
         int units = Math.max(1, (int) Math.ceil(max / 2f));
         for (int i = 0; i < units; i++) {
             int ix = x + i * ICON_STEP;
@@ -138,7 +138,7 @@ public final class ItemsView {
                 (float) mouseX, (float) mouseY, e);
     }
 
-    private static void slotBg(GuiGraphics g, ResourceLocation sprite, int x, int y) {
+    private static void slotBg(GuiGraphics g, Identifier sprite, int x, int y) {
         g.blitSprite(net.minecraft.client.renderer.RenderPipelines.GUI_TEXTURED, sprite, x, y, 16, 16);
     }
 

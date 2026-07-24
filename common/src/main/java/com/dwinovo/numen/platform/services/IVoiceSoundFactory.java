@@ -17,7 +17,7 @@ import java.util.UUID;
  *       该侧返回覆写了这个钩子的子类
  *       ({@code NeoEntityVoiceSound} / {@code NeoVoicePreviewSound}),零 mixin;</li>
  *   <li><b>Fabric</b> — 运行 vanilla 字节码,取数仍是
- *       {@code SoundBufferLibrary.getStream(ResourceLocation, boolean)} 调用,
+ *       {@code SoundBufferLibrary.getStream(Identifier, boolean)} 调用,
  *       由 fabric 侧的 {@code MixinSoundEngine} @Redirect 到
  *       {@code VoicePcmSource.openStream()}。该侧直接返回 common 原类。</li>
  * </ul>

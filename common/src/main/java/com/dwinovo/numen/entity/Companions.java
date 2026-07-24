@@ -224,7 +224,7 @@ public final class Companions {
      * spending a fresh LLM call just to note the move. Called from each loader's dimension-change hook.
      */
     public static void onDimensionChanged(NumenPlayer body) {
-        String dim = body.level().dimension().location().toString();
+        String dim = body.level().dimension().identifier().toString();
         com.dwinovo.numen.event.GameEvents.emit(body,
                 com.dwinovo.numen.event.GameEvents.Kind.DIMENSION_CHANGE,
                 java.util.Map.of("to", dim),

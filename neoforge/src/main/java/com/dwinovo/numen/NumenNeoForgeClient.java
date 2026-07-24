@@ -3,7 +3,7 @@ package com.dwinovo.numen;
 import com.dwinovo.numen.agent.skill.SkillRegistry;
 import com.dwinovo.numen.mcp.client.McpClientManager;
 import net.minecraft.client.Minecraft;
-import net.minecraft.resources.ResourceLocation;
+import net.minecraft.resources.Identifier;
 import net.minecraft.server.packs.resources.ResourceManagerReloadListener;
 import net.neoforged.api.distmarker.Dist;
 import net.neoforged.bus.api.IEventBus;
@@ -80,7 +80,7 @@ public class NumenNeoForgeClient {
     static void registerGuiLayers(net.neoforged.neoforge.client.event.RegisterGuiLayersEvent event) {
         // HUD: advancement-style activity toasts (top-right) when not watching a panel.
         event.registerAboveAll(
-                ResourceLocation.fromNamespaceAndPath(Constants.MOD_ID, "numen_toasts"),
+                Identifier.fromNamespaceAndPath(Constants.MOD_ID, "numen_toasts"),
                 (g, delta) -> com.dwinovo.numen.client.hud.NumenToasts.render(g));
     }
 
@@ -88,7 +88,7 @@ public class NumenNeoForgeClient {
     // loader 侧注册(RegisterShadersEvent 已随 JSON shader 体系一并移除)。
 
     static void registerReloadListeners(AddClientReloadListenersEvent event) {
-        // 1.21.4 uses AddClientReloadListenersEvent.addListener(ResourceLocation, listener) —
+        // 1.21.4 uses AddClientReloadListenersEvent.addListener(Identifier, listener) —
         // the keyed API (1.21.1 was RegisterClientReloadListenersEvent.registerReloadListener,
         // no key).
         Path numenConfigRoot = Minecraft.getInstance().gameDirectory.toPath()
@@ -96,7 +96,7 @@ public class NumenNeoForgeClient {
         Path skillsDir = numenConfigRoot.resolve("skills");
 
         event.addListener(
-                ResourceLocation.fromNamespaceAndPath(Constants.MOD_ID, "skill_loader"),
+                Identifier.fromNamespaceAndPath(Constants.MOD_ID, "skill_loader"),
                 (ResourceManagerReloadListener) rm -> {
                     SkillRegistry.instance().scan(skillsDir);
                 });

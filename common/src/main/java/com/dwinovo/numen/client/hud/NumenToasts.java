@@ -54,10 +54,10 @@ public final class NumenToasts {
     private static final long AVATAR_LIFE_MS = LINE_LIFE_MS + 8000; // avatar lingers 8 s past the toast
     private static final long SLIDE_MS = 220;
 
-    private static net.minecraft.resources.ResourceLocation spr(String n) {
-        return net.minecraft.resources.ResourceLocation.fromNamespaceAndPath(com.dwinovo.numen.Constants.MOD_ID, n);
+    private static net.minecraft.resources.Identifier spr(String n) {
+        return net.minecraft.resources.Identifier.fromNamespaceAndPath(com.dwinovo.numen.Constants.MOD_ID, n);
     }
-    private static final net.minecraft.resources.ResourceLocation AVATAR_FRAME = spr("avatar_frame");
+    private static final net.minecraft.resources.Identifier AVATAR_FRAME = spr("avatar_frame");
 
     private static final Map<UUID, Integer> SEEN = new HashMap<>();
     private static final Map<UUID, Status> STATUS = new HashMap<>();

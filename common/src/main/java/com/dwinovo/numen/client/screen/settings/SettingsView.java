@@ -1309,7 +1309,7 @@ public final class SettingsView {
             java.nio.file.Path dir = Minecraft.getInstance().gameDirectory.toPath()
                     .resolve("config").resolve(com.dwinovo.numen.Constants.MOD_ID).resolve("skills");
             java.nio.file.Files.createDirectories(dir);
-            net.minecraft.Util.getPlatform().openUri(dir.toUri());
+            net.minecraft.util.Util.getPlatform().openUri(dir.toUri());
         } catch (Exception ex) {
             com.dwinovo.numen.Constants.LOG.warn("[numen] open skills folder failed: {}", ex.toString());
         }
@@ -1518,7 +1518,7 @@ public final class SettingsView {
             hoverRow(g, mouseX, mouseY, x, w, ry);
             var face = com.dwinovo.numen.client.skin.SkinTextures.faceOf(e.id(), lib.pngPath(e.id()));
             if (face != null) {
-                // 1.21.2+ 的 ResourceLocation 版签名带 (hat, upsideDown, tint)——照原版默认 (true, false, -1)。
+                // 1.21.2+ 的 Identifier 版签名带 (hat, upsideDown, tint)——照原版默认 (true, false, -1)。
                 net.minecraft.client.gui.components.PlayerFaceRenderer.draw(g, face, x, ry + 1, 16, true, false, -1);
             }
             int tx = x + 20;

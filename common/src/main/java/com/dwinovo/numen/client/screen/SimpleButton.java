@@ -6,7 +6,7 @@ import net.minecraft.client.gui.Font;
 import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.gui.components.Button;
 import net.minecraft.network.chat.Component;
-import net.minecraft.resources.ResourceLocation;
+import net.minecraft.resources.Identifier;
 
 /**
  * The Numen button, drawn procedurally from the CURRENT theme (no baked sprite, so a
@@ -14,13 +14,13 @@ import net.minecraft.resources.ResourceLocation;
  * white, disabled = sunk toward the ground. {@link #primary()} paints it in the theme's
  * CTA colour for the one action a form wants you to take.
  *
- * <p>{@link #icon(ResourceLocation)} swaps the text label for a WHITE-template sprite
+ * <p>{@link #icon(Identifier)} swaps the text label for a WHITE-template sprite
  * tinted with the label colour — icon buttons stay theme-aware too. Pair icons with a
  * vanilla {@code setTooltip} so the meaning is one hover away.
  */
 public final class SimpleButton extends Button {
 
-    private ResourceLocation icon;
+    private Identifier icon;
     private boolean primary;
     private boolean danger;
 
@@ -30,7 +30,7 @@ public final class SimpleButton extends Button {
     }
 
     /** Draw a centered, theme-tinted WHITE icon sprite instead of the text label. */
-    public SimpleButton icon(ResourceLocation icon) {
+    public SimpleButton icon(Identifier icon) {
         this.icon = icon;
         return this;
     }
@@ -48,7 +48,7 @@ public final class SimpleButton extends Button {
     }
 
     @Override
-    protected void renderWidget(GuiGraphics g, int mouseX, int mouseY, float partialTick) {
+    protected void renderContents(GuiGraphics g, int mouseX, int mouseY, float partialTick) {
         UiTheme t = UiTheme.current();
         int x = getX(), y = getY(), w = getWidth(), h = getHeight();
         boolean hovered = active && isHoveredOrFocused();

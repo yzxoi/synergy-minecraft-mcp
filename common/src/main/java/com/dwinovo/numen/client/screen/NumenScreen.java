@@ -105,15 +105,15 @@ public final class NumenScreen extends Screen {
         RUN = t.run();
         FAIL = t.fail();
     }
-    private static net.minecraft.resources.ResourceLocation railSpr(String n) {
-        return net.minecraft.resources.ResourceLocation.fromNamespaceAndPath(com.dwinovo.numen.Constants.MOD_ID, n);
+    private static net.minecraft.resources.Identifier railSpr(String n) {
+        return net.minecraft.resources.Identifier.fromNamespaceAndPath(com.dwinovo.numen.Constants.MOD_ID, n);
     }
-    private static final net.minecraft.resources.ResourceLocation AVATAR_FRAME = railSpr("avatar_frame");
-    private static final net.minecraft.resources.ResourceLocation AVATAR_FRAME_ACTIVE = railSpr("avatar_frame_active");
-    private static final net.minecraft.resources.ResourceLocation SUMMON_SPRITE = railSpr("summon");
-    private static final net.minecraft.resources.ResourceLocation SUMMON_ACTIVE = railSpr("summon_active");
-    private static final net.minecraft.resources.ResourceLocation CHEVRON_UP = railSpr("chevron_up");
-    private static final net.minecraft.resources.ResourceLocation CHEVRON_DOWN = railSpr("chevron_down");
+    private static final net.minecraft.resources.Identifier AVATAR_FRAME = railSpr("avatar_frame");
+    private static final net.minecraft.resources.Identifier AVATAR_FRAME_ACTIVE = railSpr("avatar_frame_active");
+    private static final net.minecraft.resources.Identifier SUMMON_SPRITE = railSpr("summon");
+    private static final net.minecraft.resources.Identifier SUMMON_ACTIVE = railSpr("summon_active");
+    private static final net.minecraft.resources.Identifier CHEVRON_UP = railSpr("chevron_up");
+    private static final net.minecraft.resources.Identifier CHEVRON_DOWN = railSpr("chevron_down");
 
     private UUID uuid;       // active companion (mutable — the rail switches it in place)
     private String name;
@@ -498,14 +498,14 @@ public final class NumenScreen extends Screen {
     }
 
 
-    private static net.minecraft.resources.ResourceLocation chatIcon(String n) {
-        return net.minecraft.resources.ResourceLocation.fromNamespaceAndPath(
+    private static net.minecraft.resources.Identifier chatIcon(String n) {
+        return net.minecraft.resources.Identifier.fromNamespaceAndPath(
                 com.dwinovo.numen.Constants.MOD_ID, n);
     }
-    private static final net.minecraft.resources.ResourceLocation ICON_SEND = chatIcon("icon_send");
-    private static final net.minecraft.resources.ResourceLocation ICON_MIC = chatIcon("icon_mic");
-    private static final net.minecraft.resources.ResourceLocation ICON_STOP = chatIcon("icon_stop");
-    private static final net.minecraft.resources.ResourceLocation ICON_COMPACT = chatIcon("icon_compact");
+    private static final net.minecraft.resources.Identifier ICON_SEND = chatIcon("icon_send");
+    private static final net.minecraft.resources.Identifier ICON_MIC = chatIcon("icon_mic");
+    private static final net.minecraft.resources.Identifier ICON_STOP = chatIcon("icon_stop");
+    private static final net.minecraft.resources.Identifier ICON_COMPACT = chatIcon("icon_compact");
 
     private void buildChatWidgets() {
         // 聊天行四键全部图标化(高频动作,含义靠图标 + 悬停 tooltip,不再占文字宽度)。
