@@ -58,15 +58,19 @@ public final class CompanionFactory {
         // placeNewPlayer does NOT load a hand-built fake player's .dat, so restore
         // it ourselves: position, inventory, health, owner from
         // disk. Without this a respawned companion spawns at 0,0,0 with no items.
-        loadPlayerData(server, player);
+        var savedTag = loadPlayerData(server, player);
         // 假玩家没有客户端上报的模型定制:点亮全部皮肤覆盖层与披风,否则只显示单层基础皮肤。
         // 每次 spawn(首建与重生)都重设——该字节是同步实体数据、不随 .dat 存取。
         player.showAllSkinLayers();
-        // Companions are always survival, whatever the world's default game type — their whole design
-        // (gather/drops, real combat, recoverable death) is survival-shaped, and placeNewPlayer would
-        // otherwise hand a creative world's body instabuild (no block drops, breaks auto_mine). Forced
-        // here after the .dat restore so a stale saved game type can't override it.
-        player.setGameMode(GameType.SURVIVAL);
+        // First summon defaults to survival; an existing companion keeps a saved creative mode.
+        // 1.21.11 stores playerGameType in the raw player data tag even though entity loading
+        // itself now goes through TagValueInput.
+        GameType mode = GameType.SURVIVAL;
+        if (savedTag != null && savedTag.contains("playerGameType")
+                && GameType.byId(savedTag.getInt("playerGameType").orElse(0)) == GameType.CREATIVE) {
+            mode = GameType.CREATIVE;
+        }
+        player.setGameMode(mode);
         // First spawn has no .dat to restore the owner from; set it explicitly.
         if (player.getOwnerUuid() == null) {
             player.setOwnerUuid(ownerUuid);
@@ -86,13 +90,16 @@ public final class CompanionFactory {
      * skips this for hand-constructed players, so we invoke the same load
      * ourselves. No-op on first summon (no file yet).
      */
-    private static void loadPlayerData(MinecraftServer server, NumenPlayer player) {
+    private static net.minecraft.nbt.CompoundTag loadPlayerData(
+            MinecraftServer server, NumenPlayer player) {
         // 1.21.9+ 拆掉了 PlayerList.load(player, reporter):改为按 NameAndId 读回原始
         // CompoundTag,再自己包一层 TagValueInput 喂给 player.load。
-        server.getPlayerList().loadPlayerData(new net.minecraft.server.players.NameAndId(player.getGameProfile()))
-                .map(tag -> net.minecraft.world.level.storage.TagValueInput.create(
+        var maybe = server.getPlayerList().loadPlayerData(
+                new net.minecraft.server.players.NameAndId(player.getGameProfile()));
+        maybe.map(tag -> net.minecraft.world.level.storage.TagValueInput.create(
                         net.minecraft.util.ProblemReporter.DISCARDING, player.registryAccess(), tag))
                 .ifPresent(player::load);
+        return maybe.orElse(null);
     }
 
     /** Save the companion's data and remove it from the world (dormancy). */
