@@ -20,6 +20,8 @@ public final class FabricModBlockTagsProvider extends FabricTagProvider.BlockTag
     protected void addTags(HolderLookup.Provider provider) {
         ModBlockTagData.addBlockTags(key -> {
             var b = valueLookupBuilder(key);
+            // 1.21.11 的 TagAppender 已直接接受外部 TagKey；旧版 Fabric 的
+            // forceAddTag 归属校验绕行 API 已被移除。
             return ModItemTagData.appender(v -> b.add(v), t -> b.addTag(t));
         });
     }

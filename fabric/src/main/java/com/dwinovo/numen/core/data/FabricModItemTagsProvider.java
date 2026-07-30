@@ -20,6 +20,7 @@ public final class FabricModItemTagsProvider extends FabricTagProvider.ItemTagPr
     protected void addTags(HolderLookup.Provider provider) {
         ModItemTagData.addItemTags(key -> {
             var b = valueLookupBuilder(key);
+            // 1.21.11 同上，直接通过 TagAppender.addTag 引用外部标签。
             return ModItemTagData.appender(v -> b.add(v), t -> b.addTag(t));
         });
     }
