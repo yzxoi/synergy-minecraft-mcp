@@ -397,8 +397,10 @@ public class CompanionGameTests {
                 new Case(Blocks.SNOW.defaultBlockState().setValue(
                         net.minecraft.world.level.block.state.properties.BlockStateProperties.LAYERS, 5), 5,
                         "snow is billed per layer"),
-                new Case(Blocks.TALL_GRASS.defaultBlockState(), 2,
-                        "tall grass is two short grass"),
+                // 高草一格一件:tall_grass 自己就是物品(旧版本里不是,那时才按
+                // "两株矮的"算两件)。沿用旧口径会让玩家按清单备双份。
+                new Case(Blocks.TALL_GRASS.defaultBlockState(), 1,
+                        "tall grass is one item of its own now"),
                 new Case(Blocks.WATER.defaultBlockState(), 0, "liquids cost nothing"),
                 new Case(Blocks.AIR.defaultBlockState(), 0, "clearing costs nothing"))) {
             var t = new BuildTaskRecord.Target(c.state(), Items.STONE, BlockPos.ZERO, "x",
@@ -897,6 +899,100 @@ public class CompanionGameTests {
         var carried = com.dwinovo.numen.core.task.BuildStates.payloadStacks(frame, registries);
         helper.assertTrue(carried.size() == 1 && carried.get(0).is(Items.DIAMOND_SWORD),
                 "what a frame carries must be read out as its own requirement, got " + carried);
+        helper.succeed();
+    }
+
+    /**
+     * 材料记账上<b>有意</b>不随大流的那几行,钉成断言。
+     *
+     * <p>"没有自己的物品"这件事,通行做法是整格丢掉——方块的 {@code asItem()} 是空气,
+     * 那一格就不进清单也不放。这条规则对水和活塞头是对的,对<b>带花的花盆和作物</b>是
+     * 错的:用户那栋日式小屋里有二十一个花盆加一片小麦胡萝卜,按那条规则建出来就少了
+     * 这些,而院子里少二十一个花盆是一眼就看得见的。我们改成按"种下去该花的那件东西"
+     * 计价(空盆、种子、果实),多建二十二格。
+     *
+     * <p>反方向也有:一格四根蜡烛、贴三面的藤蔓,通行做法是收一件。那是白送。我们按
+     * 根数与面数收。
+     *
+     * <p>两个方向合起来是同一条判据:<b>一格该收多少,取决于人手工要花多少</b>,不取决于
+     * 那个方块的 {@code asItem()} 恰好是什么。这条测试的意义不是"证明我们对",是把这几行
+     * 分歧写在明处——哪天有人照通行做法"修正"回去,得先来改这里的字。
+     */
+    @GameTest(template = "floor16", timeoutTicks = 300, batch = "numen_build")
+    public static void material_accounting_divergences_are_deliberate(GameTestHelper helper) {
+        ServerLevel level = helper.getLevel();
+        BlockPos probe = helper.absolutePos(new BlockPos(1, 2, 1));
+
+        // 一、"这个方块该收什么料"这个问题,答案<b>问方块自己</b>,不查写死的表。
+        // 中键取方块是原版给每个方块留的自述接口:小麦答种子、洞穴藤蔓答发光浆果、
+        // 竹笋答竹子、连枝的瓜藤答瓜种、带花的花盆答盆里那株花。这十三条此前是一行行
+        // 写死的,每行都是被咬过一次才补上,而且只认原版——模组的作物一个都不认。
+        //
+        // 这一组断言钉的不是"某个方块该收某件料",而是<b>这些答案不该由我们回答</b>。
+        record Ask(net.minecraft.world.level.block.Block block,
+                   net.minecraft.world.item.Item pay, String what) {}
+        for (Ask s : List.of(
+                new Ask(Blocks.KELP_PLANT, Items.KELP, "kelp"),
+                new Ask(Blocks.BAMBOO_SAPLING, Items.BAMBOO, "a bamboo shoot"),
+                new Ask(Blocks.ATTACHED_PUMPKIN_STEM, Items.PUMPKIN_SEEDS, "an attached pumpkin stem"),
+                new Ask(Blocks.ATTACHED_MELON_STEM, Items.MELON_SEEDS, "an attached melon stem"),
+                new Ask(Blocks.CAVE_VINES_PLANT, Items.GLOW_BERRIES, "a cave vine plant"),
+                new Ask(Blocks.WHEAT, Items.WHEAT_SEEDS, "wheat"),
+                new Ask(Blocks.CARROTS, Items.CARROT, "carrots"),
+                new Ask(Blocks.POTATOES, Items.POTATO, "potatoes"),
+                new Ask(Blocks.BEETROOTS, Items.BEETROOT_SEEDS, "beetroots"),
+                new Ask(Blocks.CAVE_VINES, Items.GLOW_BERRIES, "cave vines"),
+                new Ask(Blocks.SWEET_BERRY_BUSH, Items.SWEET_BERRIES, "a berry bush"),
+                new Ask(Blocks.MELON_STEM, Items.MELON_SEEDS, "a melon stem"),
+                new Ask(Blocks.TRIPWIRE, Items.STRING, "tripwire"),
+                new Ask(Blocks.REDSTONE_WIRE, Items.REDSTONE, "redstone wire"),
+                new Ask(Blocks.TALL_GRASS, Items.TALL_GRASS, "tall grass"),
+                new Ask(Blocks.LARGE_FERN, Items.LARGE_FERN, "a large fern"))) {
+            BlockState state = s.block().defaultBlockState();
+            helper.assertTrue(com.dwinovo.numen.core.task.BuildStates
+                            .materialItem(state, level, probe) == s.pay(),
+                    s.what() + " should cost " + s.pay() + " — and that answer must come from"
+                            + " asking the block, not from a table of ours");
+        }
+
+        // 二、方块自述给不出正确答案的那种,才进表。耕地与土径自述的是自己(那两件
+        // 物品确实存在),但人手上没有"一块耕地"可放——那是拿锄头在土上刨出来的。
+        for (net.minecraft.world.level.block.Block b : List.of(Blocks.FARMLAND, Blocks.DIRT_PATH)) {
+            helper.assertTrue(b.asItem() != Items.DIRT,
+                    b + " self-reports " + b.asItem() + "; if that ever became dirt,"
+                            + " this override could go");
+            helper.assertTrue(com.dwinovo.numen.core.task.BuildStates
+                            .materialItem(b.defaultBlockState(), level, probe) == Items.DIRT,
+                    b + " is worked from dirt by hand, so dirt is what it costs");
+        }
+
+        // 三、一格不止一件:这几行按"人手工要花多少"收,不按一件收
+        record Many(BlockState state, net.minecraft.world.item.Item pay, int count, String what) {}
+        BlockState fourCandles = Blocks.CANDLE.defaultBlockState()
+                .setValue(net.minecraft.world.level.block.state.properties.BlockStateProperties
+                        .CANDLES, 4);
+        BlockState threeFacedVine = Blocks.VINE.defaultBlockState()
+                .setValue(net.minecraft.world.level.block.state.properties.BlockStateProperties.NORTH, true)
+                .setValue(net.minecraft.world.level.block.state.properties.BlockStateProperties.EAST, true)
+                .setValue(net.minecraft.world.level.block.state.properties.BlockStateProperties.UP, true);
+        BlockState doubleSlab = Blocks.STONE_SLAB.defaultBlockState()
+                .setValue(net.minecraft.world.level.block.state.properties.BlockStateProperties.SLAB_TYPE,
+                        net.minecraft.world.level.block.state.properties.SlabType.DOUBLE);
+        BlockState fiveSnow = Blocks.SNOW.defaultBlockState()
+                .setValue(net.minecraft.world.level.block.state.properties.BlockStateProperties.LAYERS, 5);
+        for (Many m : List.of(
+                new Many(fourCandles, Items.CANDLE, 4, "four candles in one cell cost four candles"),
+                new Many(threeFacedVine, Items.VINE, 3, "vines on three faces cost three"),
+                new Many(doubleSlab, Items.STONE_SLAB, 2, "a double slab is two slabs"),
+                new Many(fiveSnow, Items.SNOW, 5, "five snow layers cost five"),
+                // 高草一格一件:tall_grass 自己就是物品,不再按"两株矮的"算
+                new Many(Blocks.TALL_GRASS.defaultBlockState(), Items.TALL_GRASS, 1,
+                        "tall grass is one item of its own now"))) {
+            var target = new BuildTaskRecord.Target(m.state(), m.pay(), BlockPos.ZERO,
+                    "x", null, null, null);
+            helper.assertTrue(target.materialCount() == m.count(),
+                    m.what() + " — got " + target.materialCount());
+        }
         helper.succeed();
     }
 
