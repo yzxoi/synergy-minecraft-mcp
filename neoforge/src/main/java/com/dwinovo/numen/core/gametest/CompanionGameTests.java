@@ -1145,6 +1145,398 @@ public class CompanionGameTests {
         helper.succeed();
     }
 
+    /**
+     * 同一份任务派<b>两次</b>,第二次必须什么都不做——这是"重发同一个调用就是续建"这句
+     * 承诺的唯一证据。
+     *
+     * <p>我们把这句话写进了工具描述、教给了模型:缺料就补料、然后<b>重发一模一样的调用</b>,
+     * 已经立着的部分自动跳过。整条路上有四个地方会把它变成谎言:方块的幂等靠逐格拿世界
+     * 当对照(这条最稳),而<b>摆设是实体</b>——没有"已经在那儿了吗"这一步,建完再发一次
+     * 就多一份,同一面墙上两个展示框叠在一起;主动跳过的格若被算成待办,第二遍会去重放;
+     * 双格方块的次半若还在目标集里,第二遍又会触发一次代建;精确料(带花纹的旗、框里那把
+     * 剑)的比对若和第一遍不同源,第二遍会再收一次钱。
+     *
+     * <p>判据设计成<b>会花钱就会露馅</b>:生存同伴,每种料只给"够一遍 + 恰好多一件"。
+     * 第二遍只要动了任何一格、生成了任何一只摆设,多出来那一件就会被扣掉;而如果它连
+     * 多的那件都不够(比如重放了两格),任务会直接以缺料失败。第二份任务的
+     * {@code placed()} 与 {@code broken()} 都必须是 0——不是"结果看起来一样",而是
+     * <b>一次动作都没发生</b>。
+     */
+    @GameTest(template = "floor16", timeoutTicks = 6000, batch = "numen_blueprint")
+    public static void blueprint_second_run_changes_nothing(GameTestHelper helper) throws Exception {
+        ServerLevel level = helper.getLevel();
+        writeSmallHouse(level, "fixture_twice");
+        BlockPos anchor = helper.absolutePos(new BlockPos(4, 2, 4));
+        var loaded = com.dwinovo.numen.core.blueprint.BlueprintStore.load(
+                level, "fixture_twice", anchor, 0);
+        helper.assertTrue(loaded.targets().size() == 4,
+                "three stones and one bed foot — the bed head is built by its foot, got "
+                        + loaded.targets().size());
+
+        // 生存同伴:每种料给"够一遍 + 恰好多一件"。第二遍动一下就会吃掉多的那件。
+        NumenPlayer companion = spawnAt(helper, "gametest_twice", new BlockPos(1, 2, 1), false);
+        record Give(net.minecraft.world.item.Item item, int forOnePass) {}
+        List<Give> supplies = List.of(
+                new Give(Items.STONE, 3),
+                new Give(Items.RED_BED, 1),
+                new Give(Items.ITEM_FRAME, 1),
+                new Give(Items.ARMOR_STAND, 1),
+                new Give(Items.DIAMOND, 1));
+        for (Give g : supplies) {
+            companion.getInventory().add(new ItemStack(g.item(), g.forOnePass() + 1));
+        }
+
+        var ctx = TaskDispatch.ctx("gametest-twice-1", companion);
+        var first = new BuildTaskRecord(ctx.toolCallId(), ctx.deadline(3000L), loaded.targets(),
+                com.dwinovo.numen.core.task.ReplaceMode.REPLACE_EMPTY, true, true, true,
+                loaded.blockEntityData(), loaded.entities());
+        first.cellNeeds(loaded.cellNeeds());
+        TaskDispatch.dispatchAsync(companion, first, reply -> {});
+
+        var second = new BuildTaskRecord[1];
+        net.minecraft.world.phys.AABB site = new net.minecraft.world.phys.AABB(
+                anchor.getX() - 2, anchor.getY() - 2, anchor.getZ() - 2,
+                anchor.getX() + 6, anchor.getY() + 4, anchor.getZ() + 6);
+
+        helper.startSequence()
+                // 第一遍:逐格对上,两只摆设都在
+                .thenWaitUntil(() -> {
+                    for (BuildTaskRecord.Target t : loaded.targets()) {
+                        helper.assertTrue(t.matches(level.getBlockState(t.pos())),
+                                "first run has not finished " + t.pos().toShortString()
+                                        + " (want " + t.desiredState() + ")");
+                    }
+                    helper.assertTrue(level.getEntities(
+                                    net.minecraft.world.entity.EntityType.ITEM_FRAME,
+                                    site, e -> true).size() == 1,
+                            "first run should hang exactly one item frame");
+                    helper.assertTrue(level.getEntities(
+                                    net.minecraft.world.entity.EntityType.ARMOR_STAND,
+                                    site, e -> true).size() == 1,
+                            "first run should place exactly one armour stand");
+                })
+                // 床头是床脚的落位回调造出来的,不是我们放的——它也得真的在
+                .thenExecute(() -> helper.assertTrue(
+                        level.getBlockState(anchor.offset(2, 0, 0)).is(Blocks.RED_BED),
+                        "the bed head must exist even though it was never a target cell"))
+                // 第一遍是真的在生存模式下逐格砌出来的,不是本来就在那儿
+                .thenExecute(() -> helper.assertTrue(
+                        first.placed() == loaded.targets().size(),
+                        "the first run should have placed all " + loaded.targets().size()
+                                + " cells itself, got " + first.placed()))
+                // 派第二次:同一份目标集、同一份摆设
+                .thenExecute(() -> {
+                    var ctx2 = TaskDispatch.ctx("gametest-twice-2", companion);
+                    second[0] = new BuildTaskRecord(ctx2.toolCallId(), ctx2.deadline(3000L),
+                            loaded.targets(), com.dwinovo.numen.core.task.ReplaceMode.REPLACE_EMPTY,
+                            true, true, true, loaded.blockEntityData(), loaded.entities());
+                    second[0].cellNeeds(loaded.cellNeeds());
+                    TaskDispatch.dispatchAsync(companion, second[0], reply -> {});
+                })
+                .thenIdle(60)
+                .thenExecute(() -> {
+                    // 先证明第二份任务<b>真的跑了</b>。派发若被静默拒掉(比如上一个任务还
+                    // 占着),下面那些 0 会全部成立而什么都没测到——那是最坏的一种绿。
+                    helper.assertTrue(second[0].completed() == loaded.targets().size(),
+                            "the second run must have actually executed and seen all "
+                                    + loaded.targets().size() + " cells as already done, but its"
+                                    + " completed count is " + second[0].completed()
+                                    + " — if it is 0 the dispatch never happened and this whole"
+                                    + " test proves nothing");
+                    // 一次动作都没发生:不是"结果看起来一样"
+                    helper.assertTrue(second[0].placed() == 0,
+                            "the second run placed " + second[0].placed()
+                                    + " cell(s); resending the same call must be a no-op");
+                    helper.assertTrue(second[0].broken() == 0,
+                            "the second run broke " + second[0].broken() + " block(s)");
+                    // 摆设没多出来——这一条没有幂等检查的话必然翻倍
+                    helper.assertTrue(level.getEntities(
+                                    net.minecraft.world.entity.EntityType.ITEM_FRAME,
+                                    site, e -> true).size() == 1,
+                            "a second run must not hang a second item frame on the same wall");
+                    helper.assertTrue(level.getEntities(
+                                    net.minecraft.world.entity.EntityType.ARMOR_STAND,
+                                    site, e -> true).size() == 1,
+                            "a second run must not place a second armour stand");
+                    // 多留的那一件料还在:第二遍一分钱没花
+                    for (Give g : supplies) {
+                        int left = 0;
+                        for (int i = 0; i < 36; i++) {
+                            ItemStack stack = companion.getInventory().getItem(i);
+                            if (!stack.isEmpty() && stack.is(g.item())) {
+                                left += stack.getCount();
+                            }
+                        }
+                        helper.assertTrue(left == 1,
+                                "one spare " + g.item() + " was set aside; the second run should"
+                                        + " have spent nothing, but " + left + " remain");
+                    }
+                })
+                .thenSucceed();
+    }
+
+    /**
+     * <b>半途缺料 → 补料 → 重发同一个调用 → 从断点接上</b>。这是玩家真会走的那条路。
+     *
+     * <p>上一条用例测的是"全建完再重发",那时世界里每一格都已达标,判定简单。这一条难在
+     * 中途停下的那个状态:世界里<b>一半达标一半没有</b>,而任务已经失败退出。第二次派发要
+     * 从这个混合状态里正确地认出"哪些还欠着",而这条路上每个记账口径都会被考一遍——预检
+     * 的报缺、逐格闸门、实扣、以及跳过格与待办格混在一起时的分母。
+     *
+     * <p>判据是<b>总账</b>:给的料 = 报价 + 每种各一件备用。两遍跑完之后,备用的那一件
+     * 必须一件不少地还在——多扣一件说明重放了格子,少建一格说明续建漏了。中间还要断言
+     * 第一遍<b>真的停在了半途</b>(建了但没建完),否则这条用例退化成上一条。
+     *
+     * <p>顺带压住一个曾经的真事故:第一遍失败退出时摆设不该生成(它们在收工那一步),
+     * 而第二遍补上之后必须各只有一只。
+     */
+    @GameTest(template = "floor16", timeoutTicks = 12000, batch = "numen_blueprint")
+    public static void blueprint_restock_and_resend_continues(GameTestHelper helper)
+            throws Exception {
+        ServerLevel level = helper.getLevel();
+        writeSmallHouse(level, "fixture_partial");
+        BlockPos anchor = helper.absolutePos(new BlockPos(4, 2, 4));
+        var loaded = com.dwinovo.numen.core.blueprint.BlueprintStore.load(
+                level, "fixture_partial", anchor, 0);
+
+        NumenPlayer companion = spawnAt(helper, "gametest_restock", new BlockPos(1, 2, 1), false);
+        // 第一批只给两块石头——够砌墙的一部分,床与摆设一件料都没有
+        companion.getInventory().add(new ItemStack(Items.STONE, 2));
+
+        var ctx = TaskDispatch.ctx("gametest-restock-1", companion);
+        var first = new BuildTaskRecord(ctx.toolCallId(), ctx.deadline(6000L), loaded.targets(),
+                com.dwinovo.numen.core.task.ReplaceMode.REPLACE_EMPTY, true, true, true,
+                loaded.blockEntityData(), loaded.entities());
+        first.cellNeeds(loaded.cellNeeds());
+        // 注:dispatchAsync 的 reply 是<b>派发受理</b>回执("已受理,后台执行中"),不是
+        // 最终结果——拿它当完工信号会立刻通过而什么都没等到。用进度本身当信号。
+        TaskDispatch.dispatchAsync(companion, first, reply -> {});
+
+        var second = new BuildTaskRecord[1];
+        net.minecraft.world.phys.AABB site = new net.minecraft.world.phys.AABB(
+                anchor.getX() - 2, anchor.getY() - 2, anchor.getZ() - 2,
+                anchor.getX() + 6, anchor.getY() + 4, anchor.getZ() + 6);
+
+        helper.startSequence()
+                // 她把手上两块石头砌出去
+                .thenWaitUntil(() -> helper.assertTrue(first.placed() >= 2,
+                        "she should lay the two stones she has, placed=" + first.placed()))
+                // 再等三个零进展遍走完(每遍之间有挪窝冷却),任务缺料失败退出
+                .thenIdle(400)
+                .thenExecute(() -> {
+                    // 停在半途:砌了东西,但没砌完——否则这条用例退化成上一条
+                    helper.assertTrue(first.placed() == 2,
+                            "with two stones exactly two cells should be laid, got "
+                                    + first.placed());
+                    long done = loaded.targets().stream()
+                            .filter(t -> t.matches(level.getBlockState(t.pos()))).count();
+                    helper.assertTrue(done == 2,
+                            "exactly two of the " + loaded.targets().size()
+                                    + " cells should be standing, got " + done);
+                    // 收工那一步没跑,所以摆设一只都还没有
+                    helper.assertTrue(level.getEntities(
+                                    net.minecraft.world.entity.EntityType.ITEM_FRAME,
+                                    site, e -> true).isEmpty(),
+                            "a run that ran out of materials must not have spawned fixtures yet");
+                    helper.assertTrue(level.getEntities(
+                                    net.minecraft.world.entity.EntityType.ARMOR_STAND,
+                                    site, e -> true).isEmpty(),
+                            "nor the armour stand");
+                })
+                // 补料:剩下的报价 + 每种各一件备用。重发一模一样的调用。
+                .thenExecute(() -> {
+                    companion.getInventory().add(new ItemStack(Items.STONE, 1 + 1));
+                    companion.getInventory().add(new ItemStack(Items.RED_BED, 1 + 1));
+                    companion.getInventory().add(new ItemStack(Items.ITEM_FRAME, 1 + 1));
+                    companion.getInventory().add(new ItemStack(Items.ARMOR_STAND, 1 + 1));
+                    companion.getInventory().add(new ItemStack(Items.DIAMOND, 1 + 1));
+                    var ctx2 = TaskDispatch.ctx("gametest-restock-2", companion);
+                    second[0] = new BuildTaskRecord(ctx2.toolCallId(), ctx2.deadline(6000L),
+                            loaded.targets(), com.dwinovo.numen.core.task.ReplaceMode.REPLACE_EMPTY,
+                            true, true, true, loaded.blockEntityData(), loaded.entities());
+                    second[0].cellNeeds(loaded.cellNeeds());
+                    TaskDispatch.dispatchAsync(companion, second[0], reply -> {});
+                })
+                // 第二遍把剩下的补齐
+                .thenWaitUntil(() -> {
+                    for (BuildTaskRecord.Target t : loaded.targets()) {
+                        helper.assertTrue(t.matches(level.getBlockState(t.pos())),
+                                "restocked run has not finished " + t.pos().toShortString());
+                    }
+                    helper.assertTrue(level.getEntities(
+                                    net.minecraft.world.entity.EntityType.ITEM_FRAME,
+                                    site, e -> true).size() == 1,
+                            "the restocked run should hang the item frame");
+                    helper.assertTrue(level.getEntities(
+                                    net.minecraft.world.entity.EntityType.ARMOR_STAND,
+                                    site, e -> true).size() == 1,
+                            "the restocked run should place the armour stand");
+                })
+                .thenIdle(20)
+                .thenExecute(() -> {
+                    // 第二遍只补了欠的那两格,没重放已经立着的
+                    helper.assertTrue(second[0].placed() == 2,
+                            "the restocked run should only owe two cells, but it placed "
+                                    + second[0].placed() + " — it re-laid work that was already up");
+                    helper.assertTrue(second[0].broken() == 0,
+                            "and it should not have broken anything, got " + second[0].broken());
+                    // 床头由床脚代建,从来不是目标格
+                    helper.assertTrue(level.getBlockState(anchor.offset(2, 0, 0)).is(Blocks.RED_BED),
+                            "the bed head must be there, built by its foot");
+                    // 总账:每种料的备用那一件必须一件不少
+                    for (net.minecraft.world.item.Item item : List.of(
+                            Items.STONE, Items.RED_BED, Items.ITEM_FRAME,
+                            Items.ARMOR_STAND, Items.DIAMOND)) {
+                        int left = 0;
+                        for (int i = 0; i < 36; i++) {
+                            ItemStack stack = companion.getInventory().getItem(i);
+                            if (!stack.isEmpty() && stack.is(item)) {
+                                left += stack.getCount();
+                            }
+                        }
+                        helper.assertTrue(left == 1,
+                                "across both runs the total spent must equal the quote: one spare "
+                                        + item + " was set aside but " + left + " remain");
+                    }
+                })
+                .thenSucceed();
+    }
+
+    /**
+     * 续建那两条用例共用的小图纸:三块石头一面墙 + 一张朝北的床(两半都在文件里) +
+     * 一个挂在墙上的展示框(框里一颗钻石) + 一个盔甲架。
+     *
+     * <p>特意把四类难处凑在四格里:双格方块的次半、按组件全等收的载荷、要依托墙面的挂件、
+     * 以及要计料的躯壳。报价是 3 石 + 1 床 + 1 展示框 + 1 盔甲架 + 1 钻石。
+     */
+    private static void writeSmallHouse(ServerLevel level, String name) throws Exception {
+        BlockState bedFoot = Blocks.RED_BED.defaultBlockState()
+                .setValue(net.minecraft.world.level.block.state.properties.BlockStateProperties.BED_PART,
+                        net.minecraft.world.level.block.state.properties.BedPart.FOOT)
+                .setValue(net.minecraft.world.level.block.state.properties.BlockStateProperties
+                        .HORIZONTAL_FACING, net.minecraft.core.Direction.NORTH);
+        BlockState bedHead = bedFoot.setValue(
+                net.minecraft.world.level.block.state.properties.BlockStateProperties.BED_PART,
+                net.minecraft.world.level.block.state.properties.BedPart.HEAD);
+
+        var root = new net.minecraft.nbt.CompoundTag();
+        var size = new net.minecraft.nbt.ListTag();
+        size.add(net.minecraft.nbt.IntTag.valueOf(4));
+        size.add(net.minecraft.nbt.IntTag.valueOf(2));
+        size.add(net.minecraft.nbt.IntTag.valueOf(4));
+        root.put("size", size);
+        var palette = new net.minecraft.nbt.ListTag();
+        for (BlockState s : List.of(Blocks.STONE.defaultBlockState(), bedHead, bedFoot)) {
+            palette.add(net.minecraft.nbt.NbtUtils.writeBlockState(s));
+        }
+        root.put("palette", palette);
+        var blocks = new net.minecraft.nbt.ListTag();
+        blocks.add(cellTag(0, 0, 0, 0));
+        blocks.add(cellTag(0, 0, 1, 0));
+        blocks.add(cellTag(0, 0, 2, 0));   // 挂展示框的那面墙
+        blocks.add(cellTag(2, 0, 0, 1));   // 床头(朝北,z 更小)——加载期该被剔掉
+        blocks.add(cellTag(2, 0, 1, 2));   // 床脚
+        root.put("blocks", blocks);
+
+        // 展示框挂在 (0,0,2) 那块石头的南面,框里一颗钻石;盔甲架立在院里
+        var frameNbt = new net.minecraft.nbt.CompoundTag();
+        frameNbt.putString("id", "minecraft:item_frame");
+        frameNbt.putByte("Facing", (byte) net.minecraft.core.Direction.SOUTH.get3DDataValue());
+        var held = new net.minecraft.nbt.CompoundTag();
+        held.putString("id", "minecraft:diamond");
+        held.putInt("count", 1);
+        frameNbt.put("Item", held);
+        var standNbt = new net.minecraft.nbt.CompoundTag();
+        standNbt.putString("id", "minecraft:armor_stand");
+        var entities = new net.minecraft.nbt.ListTag();
+        entities.add(entityTag(0.5, 0.5, 3.5, frameNbt));
+        entities.add(entityTag(3.5, 0.0, 3.5, standNbt));
+        root.put("entities", entities);
+        net.minecraft.nbt.NbtIo.writeCompressed(root,
+                com.dwinovo.numen.core.blueprint.BlueprintStore.dir(level.getServer())
+                        .resolve(name + ".nbt"));
+    }
+
+    /**
+     * 坏掉的图纸要<b>干净地报错</b>,不能崩、也不能把服务端冻住。
+     *
+     * <p>图纸是玩家目录里的文件:可以手改、可以从网上下载、可以下到一半断线。解码器面对
+     * 的是不可信输入,而它跑在服务端主线程上。两类事故各防一条:
+     * <ul>
+     *   <li><b>越界</b>——调色板下标指向不存在的项。裸下标会抛数组越界,一路冒到工具调用
+     *       之外。改成跳过那一格并计入掉格。</li>
+     *   <li><b>冻死</b>——区域尺寸直接来自文件。声明 100000³ 的话遍历要转上万亿次,服务端
+     *       不是崩而是<b>整个没反应</b>,而那比崩更难查:没有崩溃报告,只有"服务器卡住了"。
+     *       所以遍历有独立于格数的体积上限。</li>
+     * </ul>
+     */
+    @GameTest(template = "floor16", timeoutTicks = 400, batch = "numen_blueprint")
+    public static void corrupt_blueprints_fail_cleanly(GameTestHelper helper) throws Exception {
+        ServerLevel level = helper.getLevel();
+        var dir = com.dwinovo.numen.core.blueprint.BlueprintStore.dir(level.getServer());
+        BlockPos anchor = helper.absolutePos(new BlockPos(2, 2, 2));
+
+        // 一、调色板下标越界:三格里有两格指向不存在的调色板项
+        var root = new net.minecraft.nbt.CompoundTag();
+        var size = new net.minecraft.nbt.ListTag();
+        for (int n : new int[]{3, 1, 3}) {
+            size.add(net.minecraft.nbt.IntTag.valueOf(n));
+        }
+        root.put("size", size);
+        var palette = new net.minecraft.nbt.ListTag();
+        palette.add(net.minecraft.nbt.NbtUtils.writeBlockState(Blocks.STONE.defaultBlockState()));
+        root.put("palette", palette);
+        var blocks = new net.minecraft.nbt.ListTag();
+        blocks.add(cellTag(0, 0, 0, 0));      // 好的
+        blocks.add(cellTag(1, 0, 0, 7));      // 越界
+        blocks.add(cellTag(2, 0, 0, -1));     // 负下标
+        root.put("blocks", blocks);
+        net.minecraft.nbt.NbtIo.writeCompressed(root, dir.resolve("fixture_badindex.nbt"));
+
+        var loaded = com.dwinovo.numen.core.blueprint.BlueprintStore.load(
+                level, "fixture_badindex", anchor, 0);
+        helper.assertTrue(loaded.targets().size() == 1,
+                "the one good cell should survive, got " + loaded.targets().size());
+        helper.assertTrue(loaded.dropped() == 2,
+                "and the two broken ones must be counted as dropped, got " + loaded.dropped());
+
+        // 二、体积炸弹:一个声明得离谱的 litematic 区域
+        var lite = new net.minecraft.nbt.CompoundTag();
+        var regions = new net.minecraft.nbt.CompoundTag();
+        var region = new net.minecraft.nbt.CompoundTag();
+        var pos = new net.minecraft.nbt.CompoundTag();
+        pos.putInt("x", 0);
+        pos.putInt("y", 0);
+        pos.putInt("z", 0);
+        region.put("Position", pos);
+        var rsize = new net.minecraft.nbt.CompoundTag();
+        rsize.putInt("x", 100000);
+        rsize.putInt("y", 100000);
+        rsize.putInt("z", 100000);
+        region.put("Size", rsize);
+        var rpal = new net.minecraft.nbt.ListTag();
+        var airEntry = new net.minecraft.nbt.CompoundTag();
+        airEntry.putString("Name", "minecraft:air");
+        rpal.add(airEntry);
+        region.put("BlockStatePalette", rpal);
+        region.putLongArray("BlockStates", new long[]{0L});
+        regions.put("bomb", region);
+        lite.put("Regions", regions);
+        net.minecraft.nbt.NbtIo.writeCompressed(lite, dir.resolve("fixture_bomb.litematic"));
+
+        boolean refused = false;
+        try {
+            com.dwinovo.numen.core.blueprint.BlueprintStore.load(
+                    level, "fixture_bomb", anchor, 0);
+        } catch (IllegalArgumentException e) {
+            // 判据是"说人话地拒绝",不是"没有卡住"——后者测不出来(卡住就是超时)
+            refused = e.getMessage() != null && e.getMessage().contains("corrupt");
+        }
+        helper.assertTrue(refused,
+                "a region declaring 100000^3 must be refused with a readable reason, not walked");
+        helper.succeed();
+    }
+
     /** 结构 NBT 的一只实体:{pos:[x,y,z], blockPos:[..], nbt:{...}}。 */
     private static net.minecraft.nbt.CompoundTag entityTag(double x, double y, double z,
                                                            net.minecraft.nbt.CompoundTag nbt) {
