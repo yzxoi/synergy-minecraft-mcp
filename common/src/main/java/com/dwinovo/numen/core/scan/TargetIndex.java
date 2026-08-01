@@ -217,7 +217,7 @@ public final class TargetIndex {
         List<BlockPos> out = new ArrayList<>();
         int centerCx = SectionPos.blockToSectionCoord(center.getX());
         int centerCz = SectionPos.blockToSectionCoord(center.getZ());
-        int minSection = level.getMinSection();
+        int minSection = level.getMinSectionY();
         int sectionCount = level.getSectionsCount();
         int budget = buildBudget;
         boolean complete = true;
