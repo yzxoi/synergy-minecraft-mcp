@@ -182,6 +182,8 @@ public final class BuildCompanionTask extends AbstractCompanionTask<BuildTaskRec
     private int skippedPayloads;
     private int passStartCompleted;
     private int barrenPasses;
+    /** Last completed-cell high-water mark emitted as material task progress. */
+    private int lastReportedCompleted;
     /**
      * 本遍已经证明<b>付不起剩下任何一格</b>——缺料这件事在这一刻就成立了,不必走完这遍。
      *
@@ -501,6 +503,7 @@ public final class BuildCompanionTask extends AbstractCompanionTask<BuildTaskRec
 
     @Override
     protected void onStart() {
+        r.setStallWarningTicks(30 * 20);
         observedCompleted = new LongOpenHashSet();
         skippedPos = new LongOpenHashSet();
         computeSite();
@@ -510,7 +513,10 @@ public final class BuildCompanionTask extends AbstractCompanionTask<BuildTaskRec
         rebuildOrder();
         computePace();
         passStartCompleted = r.completed();
+        lastReportedCompleted = r.completed();
         phase = Phase.TRAVEL;
+        reportActivity("planning", "compiled build targets and checked existing cells",
+                buildProgressMetrics());
     }
 
     @Override
@@ -531,10 +537,36 @@ public final class BuildCompanionTask extends AbstractCompanionTask<BuildTaskRec
                 return finish();
             }
         }
-        return switch (phase) {
+        TaskState state = switch (phase) {
             case TRAVEL -> tickTravel();
             case WORK -> tickWork();
         };
+        if (state == TaskState.RUNNING) {
+            if (r.completed() > lastReportedCompleted) {
+                lastReportedCompleted = r.completed();
+                reportProgress("building", "completed another batch of build cells",
+                        buildProgressMetrics());
+            } else {
+                reportActivity(phase == Phase.TRAVEL ? "navigating" : "building",
+                        phase == Phase.TRAVEL
+                                ? "approaching the build site"
+                                : "working through the current build pass",
+                        buildProgressMetrics());
+            }
+        }
+        return state;
+    }
+
+    private Map<String, Object> buildProgressMetrics() {
+        Map<String, Object> metrics = new LinkedHashMap<>();
+        metrics.put("completed", r.completed());
+        metrics.put("total", r.targets.size());
+        metrics.put("remaining", Math.max(0, r.targets.size() - r.completed() - skippedCells));
+        metrics.put("skipped", skippedCells);
+        metrics.put("placed", r.placed());
+        metrics.put("cleared", r.broken());
+        metrics.put("barren_passes", barrenPasses);
+        return metrics;
     }
 
     // ------------------------------------------------------------------

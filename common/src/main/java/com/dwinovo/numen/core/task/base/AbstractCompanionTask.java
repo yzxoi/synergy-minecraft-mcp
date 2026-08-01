@@ -13,6 +13,7 @@ import com.dwinovo.numen.task.TaskResult;
 
 import java.util.HashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 
 /**
@@ -167,11 +168,22 @@ public abstract class AbstractCompanionTask<R extends TaskRecord>
     @Override
     public final TaskResult buildResult(TaskState finalState) {
         cleanup();
+        Map<String, Object> data = new HashMap<>(resultData());
+        if (finalState == TaskState.FAILED) {
+            data.put("failure_code", failType.name().toLowerCase(Locale.ROOT));
+            data.put("recoverable_by_replan", recoverableByReplan(failType));
+        } else if (finalState == TaskState.TIMEOUT) {
+            data.put("failure_code", "timed_out");
+            data.put("recoverable_by_replan", true);
+        } else if (finalState == TaskState.CANCELLED) {
+            data.put("failure_code", "interrupted");
+            data.put("recoverable_by_replan", true);
+        }
         return switch (finalState) {
-            case SUCCESS   -> TaskResult.ok(successMessage(), resultData());
-            case TIMEOUT   -> new TaskResult(false, timeoutMessage(), true, false, resultData());
-            case CANCELLED -> new TaskResult(false, cancelledMessage(), false, true, resultData());
-            default        -> TaskResult.fail(doneReason, resultData());   // FAILED and any stray state
+            case SUCCESS   -> TaskResult.ok(successMessage(), data);
+            case TIMEOUT   -> new TaskResult(false, timeoutMessage(), true, false, data);
+            case CANCELLED -> new TaskResult(false, cancelledMessage(), false, true, data);
+            default        -> TaskResult.fail(doneReason, data);   // FAILED and any stray state
         };
     }
 
@@ -229,6 +241,8 @@ public abstract class AbstractCompanionTask<R extends TaskRecord>
         this.doneReason = why;
         this.failType = t;
         this.pendingTerminal = TaskState.FAILED;
+        reportActivity("blocked", why, Map.of(
+                "failure_code", t.name().toLowerCase(Locale.ROOT)));
     }
 
     /**
@@ -238,6 +252,7 @@ public abstract class AbstractCompanionTask<R extends TaskRecord>
      */
     protected void succeed() {
         this.pendingTerminal = TaskState.SUCCESS;
+        reportActivity("completing", "goal satisfied", Map.of());
     }
 
     /** The structured cause of the most recent failure (or {@link FailureType#UNKNOWN}). */
@@ -248,6 +263,28 @@ public abstract class AbstractCompanionTask<R extends TaskRecord>
     /** The model-facing reason recorded by the most recent {@link #fail}. */
     protected String doneReason() {
         return doneReason;
+    }
+
+    // ---------------------------------------------------------------------
+    // Unified progress reporting
+    // ---------------------------------------------------------------------
+
+    /** Fresh activity that does not prove the objective advanced. */
+    protected final void reportActivity(String phase, String message, Map<String, Object> metrics) {
+        r.reportActivity(player.level().getGameTime(), phase, message, metrics);
+    }
+
+    /** Fresh activity that materially advanced the objective. */
+    protected final void reportProgress(String phase, String message, Map<String, Object> metrics) {
+        r.reportProgress(player.level().getGameTime(), phase, message, metrics);
+    }
+
+    private static boolean recoverableByReplan(FailureType type) {
+        return switch (type) {
+            case OCCLUDED, BOXED_IN, NO_PATH, OUT_OF_REACH, STANCE_DUD, HAZARD,
+                    TARGET_LOST, MINED_OUT, TIMED_OUT, INTERRUPTED -> true;
+            default -> false;
+        };
     }
 
     // ---------------------------------------------------------------------

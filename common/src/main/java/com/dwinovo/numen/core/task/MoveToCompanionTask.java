@@ -101,7 +101,10 @@ public final class MoveToCompanionTask extends AbstractCompanionTask<MoveToTaskR
 
     @Override
     protected void onStart() {
+        r.setStallWarningTicks(PROGRESS_LEASE_TICKS);
         if (r.kind == MoveToTaskRecord.Kind.FIND) {
+            reportActivity("scanning", "searching loaded chunks for " + r.block,
+                    Map.of("target", r.block));
             // 就近方块:解析 id → 离线扫描附近候选;导航等首批候选到手再建
             var id = net.minecraft.resources.Identifier.tryParse(r.block);
             var b = id == null ? null : net.minecraft.core.registries.BuiltInRegistries.BLOCK.getValue(id);
@@ -124,6 +127,8 @@ public final class MoveToCompanionTask extends AbstractCompanionTask<MoveToTaskR
         // onTick observes reached() and returns SUCCESS — same outcome as the old
         // start-time short-circuit, one tick later per the base's lifecycle.
         if (reached()) return;
+        reportActivity("planning", "planning a route to the requested goal",
+                Map.of("remaining_blocks", repDistance()));
         // Initial budget from straight-line distance (terrain difficulty is unknowable
         // here — the progress lease below takes over once the journey is under way).
         long extra = Math.min(MAX_EXTRA_TICKS, 600 + (long) (repDistance() * TICKS_PER_BLOCK));
@@ -247,11 +252,24 @@ public final class MoveToCompanionTask extends AbstractCompanionTask<MoveToTaskR
         // above an underwater target, but the body keeps drifting toward it on its own (it
         // sinks). Reset the settle timer whenever we get closer.
         double d = repDistance();
+        boolean advanced = d < bestDist - 0.1;
         if (d < bestDist - 0.1) {
             bestDist = d;
             settleTicks = 0;
         } else {
             settleTicks++;
+        }
+        Map<String, Object> live = new HashMap<>();
+        live.put("remaining_blocks", d);
+        live.put("best_remaining_blocks", bestDist);
+        live.put("nav_stall_ticks", nav.stallTicks());
+        live.put("x", player.getX());
+        live.put("y", player.getY());
+        live.put("z", player.getZ());
+        if (advanced) {
+            reportProgress("navigating", "moving toward the goal", live);
+        } else {
+            reportActivity("navigating", "following or replanning the current route", live);
         }
         return switch (nav.tick()) {
             case RUNNING -> TaskState.RUNNING;
@@ -289,6 +307,8 @@ public final class MoveToCompanionTask extends AbstractCompanionTask<MoveToTaskR
                         && r.kind != MoveToTaskRecord.Kind.YLEVEL
                         && r.kind != MoveToTaskRecord.Kind.FIND) {
                     nearRetried = true;
+                    reportActivity("recovering", "retrying with the accepted near-goal tolerance",
+                            Map.of("remaining_blocks", repDistance()));
                     stopNav();
                     NavGoal retry = nearRetryGoal();
                     nav = PlayerNav.toGoal(player, () -> retry, WALK_SPEED, this::closeEnoughToSucceed);
@@ -377,6 +397,8 @@ public final class MoveToCompanionTask extends AbstractCompanionTask<MoveToTaskR
     private TaskState tickFindDiscovery() {
         drainFindScan();
         if (!candidates.isEmpty()) {
+            reportProgress("planning", "found candidate blocks and compiling a route",
+                    Map.of("candidates", candidates.size(), "target", r.block));
             rebuildFindContract();
             nav = PlayerNav.to(player, () -> findContract, WALK_SPEED, this::reached);
             nav.setHighlights(() -> java.util.List.copyOf(candidates));
@@ -388,6 +410,8 @@ public final class MoveToCompanionTask extends AbstractCompanionTask<MoveToTaskR
                     FailureType.NO_PATH);
             return TaskState.FAILED;
         }
+        reportActivity("scanning", "waiting for the loaded-area block scan",
+                Map.of("target", r.block));
         return TaskState.RUNNING;
     }
 

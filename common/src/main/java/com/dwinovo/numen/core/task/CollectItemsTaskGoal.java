@@ -52,6 +52,9 @@ public final class CollectItemsTaskGoal extends AbstractCompanionTask<CollectIte
     @Override
     protected void onStart() {
         this.phase = Phase.SCAN;
+        r.setStallWarningTicks(10 * 20);
+        reportActivity("scanning", "looking for nearby dropped items",
+                Map.of("collected", r.getCollected(), "radius", r.radius));
     }
 
     @Override
@@ -75,6 +78,8 @@ public final class CollectItemsTaskGoal extends AbstractCompanionTask<CollectIte
         target = best;
         nav = new PlayerNav(player, this::targetCell, WALK_SPEED, this::picked);
         phase = Phase.APPROACH;
+        reportActivity("navigating", "approaching dropped item " + best.getId(),
+                Map.of("collected", r.getCollected(), "target_entity_id", best.getId()));
         return TaskState.RUNNING;
     }
 
@@ -83,6 +88,8 @@ public final class CollectItemsTaskGoal extends AbstractCompanionTask<CollectIte
             // Absorbed (by us or otherwise) — count it if it was ours to get.
             if (target != null) {
                 r.incrementCollected();
+                reportProgress("collecting", "picked up a dropped item",
+                        Map.of("collected", r.getCollected()));
             }
             stopNav();
             phase = Phase.SCAN;

@@ -154,6 +154,8 @@ public final class MineCompanionTask extends AbstractCompanionTask<MineBlockTask
     /** 上一次索引查询是否覆盖完整(构建预算未耗尽)。false = 冷区域仍在渐进构建,
      *  终局判定("附近没有目标")必须等它为 true 才能下。 */
     private boolean lastQueryComplete;
+    /** Last inventory/profile-backed tally emitted as material task progress. */
+    private int lastReportedGathered;
 
     // Progressive dig (blocks break tick-by-tick at legitimate player speed, not
     // instabreak) — shared with the path executor so all breaking reads the same.
@@ -189,6 +191,7 @@ public final class MineCompanionTask extends AbstractCompanionTask<MineBlockTask
 
     @Override
     protected void onStart() {
+        r.setStallWarningTicks(30 * 20);
         // Count toward `count` by ITEMS gathered, not blocks broken: resolve what these
         // blocks drop, and snapshot how many we already hold so the tally is the delta above it.
         dropItems = computeDropItems();
@@ -204,6 +207,8 @@ public final class MineCompanionTask extends AbstractCompanionTask<MineBlockTask
                 "[numen-task] mine start targets={} count={} feet={} firstQuery={} hit(s)",
                 r.label, r.count, player.blockPosition().toShortString(),
                 knownOres.size());
+        reportActivity("scanning", "scanning loaded chunks for " + r.label,
+                mineMetrics(0));
     }
 
     @Override
@@ -214,6 +219,10 @@ public final class MineCompanionTask extends AbstractCompanionTask<MineBlockTask
                 ? Math.max(0, inventoryMatch() - baseline)
                 : brokenTargets;
         r.setMined(gathered);
+        if (gathered > lastReportedGathered) {
+            lastReportedGathered = gathered;
+            reportProgress("gathering", "inventory tally advanced", mineMetrics(gathered));
+        }
         if (gathered >= r.count) {
             progressNote = "gathered all requested";
             return TaskState.SUCCESS;
@@ -241,6 +250,7 @@ public final class MineCompanionTask extends AbstractCompanionTask<MineBlockTask
                 if (nav != null) {
                     nav.pause();   // stand still for the dig; goal/path/in-flight search stay warm
                 }
+                reportActivity("mining", "breaking the current target block", mineMetrics(gathered));
                 mineProgress(digging);
                 return TaskState.RUNNING;
             }
@@ -263,6 +273,7 @@ public final class MineCompanionTask extends AbstractCompanionTask<MineBlockTask
             if (nav != null) {
                 nav.pause();
             }
+            reportActivity("mining", "mining a reachable target", mineMetrics(gathered));
             mineProgress(reachable);
             return TaskState.RUNNING;
         }
@@ -288,6 +299,8 @@ public final class MineCompanionTask extends AbstractCompanionTask<MineBlockTask
                 nav.setHighlights(() -> new ArrayList<>(knownOres));   // box every known target
                 navIsBranch = false;
             }
+            reportActivity("navigating", "approaching a reachable target or drop",
+                    mineMetrics(gathered));
             switch (nav.tick()) {
                 case RUNNING -> { return TaskState.RUNNING; }
                 case ARRIVED -> {
@@ -346,6 +359,8 @@ public final class MineCompanionTask extends AbstractCompanionTask<MineBlockTask
         //    still building under the per-query budget) means "don't know yet", not
         //    "nothing there" — wait for full coverage before any verdict.
         if (!lastQueryComplete) {
+            reportActivity("scanning", "incrementally indexing the loaded area",
+                    mineMetrics(gathered));
             return TaskState.RUNNING;
         }
         //    Default: stop here — only the
@@ -384,6 +399,16 @@ public final class MineCompanionTask extends AbstractCompanionTask<MineBlockTask
             case FAILED -> { stopNav(); return TaskState.RUNNING; } // boxed in — rescan/retry
         }
         return TaskState.RUNNING;
+    }
+
+    private Map<String, Object> mineMetrics(int gathered) {
+        Map<String, Object> metrics = new HashMap<>();
+        metrics.put("target", r.label);
+        metrics.put("gathered", gathered);
+        metrics.put("requested", r.count);
+        metrics.put("known_targets", knownOres.size());
+        metrics.put("blacklisted_targets", blacklist.size());
+        return metrics;
     }
 
     // ---- goals ----
