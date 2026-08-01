@@ -1,11 +1,8 @@
 package com.dwinovo.numen.task;
 
-import com.dwinovo.numen.task.CompanionTickDispatcher;
-import com.dwinovo.numen.task.TaskRecord;
 import com.dwinovo.numen.agent.tool.Schema;
 import com.dwinovo.numen.agent.tool.NumenTool;
 import com.dwinovo.numen.entity.NumenPlayer;
-import com.dwinovo.numen.task.TaskResult;
 import com.google.gson.Gson;
 import com.google.gson.JsonObject;
 
@@ -27,8 +24,8 @@ public final class TaskStopTool implements NumenTool {
     @Override
     public String description() {
         return "Abort the background task (the one <current_task> / task_status shows) so the body "
-                + "frees up for something else. The wind-down summary arrives as a task_finished "
-                + "event with status=stopped. Fails when the body is already idle.";
+                + "frees up for something else. MCP callers should query task_status with the same "
+                + "task_id for its retained terminal result. Fails when the body is already idle.";
     }
 
     @Override
@@ -54,8 +51,11 @@ public final class TaskStopTool implements NumenTool {
             return;
         }
         CompanionTickDispatcher.stopActive(companion, "stopped by task_stop");
+        String completion = active.isExternalCall()
+                ? "。用 task_status(task_id) 读取保留的 cancelled 终态。"
+                : "。收尾结果会以 task_finished(status=stopped) 事件送达。";
         reply.accept(TaskResult.ok("已叫停 " + active.publicId() + "(" + active.describe()
-                + ")。收尾结果会以 task_finished(status=stopped) 事件送达。",
+                + ")" + completion,
                 Map.of("task_id", active.publicId())).toJson());
     }
 }

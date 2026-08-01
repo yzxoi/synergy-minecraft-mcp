@@ -35,9 +35,9 @@ public final class TaskDispatch {
     }
 
     /**
-     * ASYNC (long-running) tools:受理即回执 task_id,身体后台执行,收尾经
-     * task_finished 事件送达。一次只受理一件——车道上有任何工作(同步在跑/
-     * 异步在跑或排队)都拒绝。
+     * ASYNC (long-running) tools:受理即回执 task_id,身体后台执行。内置大脑的
+     * 收尾经 task_finished 事件送达;外部驱动按 task_id 查询保留的终态。一次只
+     * 受理一件——车道上有任何工作(同步在跑/异步在跑或排队)都拒绝。
      */
     public static void dispatchAsync(NumenPlayer companion, TaskRecord record, Consumer<String> reply) {
         if (CompanionTickDispatcher.llmLaneBusy(companion.getUUID())) {
@@ -49,10 +49,10 @@ public final class TaskDispatch {
         }
         record.markAsync();
         CompanionTickDispatcher.queueFor(companion.getUUID()).enqueue(record);
-        // 内置大脑靠 task_finished 事件收尾(别轮询);外部(MCP)夺舍收不到事件(那条投给内置大脑,
-        // 不是它),得自己轮询 task_status 到身体空闲,再感知确认。
+        // 内置大脑靠 task_finished 事件收尾(别轮询);外部(MCP)按受理时的 task_id
+        // 轮询结构化快照。终态会短期保留,不能再用“身体空闲”猜测任务是否成功。
         String note = record.isExternalCall()
-                ? "已受理,后台执行中。用 task_status 轮询,身体转空闲即为完成,再用感知工具确认结果;task_stop 叫停。"
+                ? "已受理,后台执行中。用 task_status(task_id) 轮询到终态并读取 result;再用感知工具确认世界状态。task_stop 可叫停。"
                 : "已受理,后台执行中。完成会自动收到 task_finished 事件,不要轮询;task_status 查进度,task_stop 叫停。";
         reply.accept(TaskResult.ok(
                 note,
@@ -72,6 +72,7 @@ public final class TaskDispatch {
         boolean eventReachesCaller = !busy.isExternalCall() && !caller.isExternalCall();
         return eventReachesCaller
                 ? head + "先 task_stop 叫停,或等它的 task_finished 事件再派新活。"
-                : head + "先 task_stop 叫停它,再派新活(这件活不会给你发 task_finished 事件)。";
+                : head + "先 task_stop 叫停,或用 task_status(task_id=\"" + busy.publicId()
+                        + "\") 跟踪到终态后再派新活。";
     }
 }

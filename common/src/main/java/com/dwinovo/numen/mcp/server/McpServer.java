@@ -69,13 +69,14 @@ public final class McpServer {
             Loop: (1) list_companions to see who is live — create_companion by name to summon a new one, \
             delete_companion to dismiss one for good; (2) perceive with get_self_status / scan_blocks / \
             scan_nearby_entities; (3) act with move_to / auto_mine / place_block / craft / equip_item / \
-            hunt / etc. Action tools return a task_id at once — poll task_status until the body is idle, \
-            then perceive to confirm. Every action tool takes a 'companion' argument (name or id), so each \
+            hunt / etc. Long actions return a task_id at once — poll task_status with that task_id until \
+            its state is terminal, inspect its structured result, then perceive to confirm. Every action \
+            tool takes a 'companion' argument (name or id), so each \
             call targets one companion; just drive it, there is no take-control step.
 
             Rules: survival mode — the tools do only what a real player can (mine to get stone; there is no \
-            give or setblock). You are blind between calls, so perceive before and after acting. Action \
-            tools return only when the task finishes or times out. You can drive several companions in \
+            give or setblock). You are blind between calls, so perceive before and after acting. A running \
+            task reports its phase, progress metrics, and whether material progress has gone stale. You can drive several companions in \
             parallel. Modded blocks, items, and GUIs (Create, AE2, Mekanism) work natively.""";
 
     private final McpConfig config;

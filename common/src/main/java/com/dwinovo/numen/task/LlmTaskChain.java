@@ -162,6 +162,14 @@ public final class LlmTaskChain implements TaskChain {
         return queue.peekAsync();
     }
 
+    /** Active, queued, or recently completed task addressed by its public id. */
+    TaskRecord taskById(String taskId) {
+        if (taskId == null || taskId.isBlank()) return null;
+        if (record != null && taskId.equals(record.publicId())) return record;
+        TaskRecord pending = queue.findPending(taskId);
+        return pending != null ? pending : queue.findRecent(taskId);
+    }
+
     // ---- lifecycle finalizers (called by CompanionTickDispatcher via CompanionLifecycle) ----
 
     /**

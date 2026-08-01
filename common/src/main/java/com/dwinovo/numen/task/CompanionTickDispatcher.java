@@ -90,6 +90,12 @@ public final class CompanionTickDispatcher {
         return brain == null ? null : brain.llm.asyncRecord();
     }
 
+    /** Resolve an active, queued, or recently completed task by public id. */
+    public static TaskRecord taskById(UUID companionUuid, String taskId) {
+        CompanionBrain brain = BRAINS.get(companionUuid);
+        return brain == null ? null : brain.llm.taskById(taskId);
+    }
+
     /** LLM 车道是否有任何工作(运行或排队,同步异步都算)。异步受理的占用判定用。 */
     public static boolean llmLaneBusy(UUID companionUuid) {
         CompanionBrain brain = BRAINS.get(companionUuid);
@@ -99,7 +105,8 @@ public final class CompanionTickDispatcher {
     /**
      * task_stop:LLM 主动叫停当前异步任务——与主人 Stop 同一条取消路(含 MAINHAND
      * 意图钉释放),原因词不同。返回被叫停的记录,null = 本来就没有异步任务在跑。
-     * 收尾结果由 drainResults 以 task_finished(status=stopped) 事件送达。
+     * 内置任务的收尾结果由 drainResults 以 task_finished(status=stopped) 事件送达;
+     * 外部任务的取消终态由 task_status(task_id) 查询。
      */
     public static TaskRecord stopActive(NumenPlayer player, String reason) {
         CompanionBrain brain = BRAINS.get(player.getUUID());

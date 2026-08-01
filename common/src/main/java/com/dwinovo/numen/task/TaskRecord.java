@@ -1,6 +1,7 @@
 package com.dwinovo.numen.task;
 import com.dwinovo.numen.task.TaskResult;
 
+import java.util.Map;
 import java.util.concurrent.atomic.AtomicLong;
 
 /**
@@ -57,6 +58,10 @@ public abstract class TaskRecord {
     private boolean async;
     /** 首次进入 RUNNING 的游戏刻;task_status 用它报已耗时。-1 = 还没开跑。 */
     private long startedGameTime = -1;
+    /** Unified live progress, populated by the task implementation while it runs. */
+    private TaskProgress progress;
+    /** 0 disables stall signalling; concrete tasks opt in with a meaningful budget. */
+    private long stallWarningTicks;
 
     protected TaskRecord(String toolName, String toolCallId, long deadlineGameTime) {
         this.id = ID_SOURCE.incrementAndGet();
@@ -98,9 +103,34 @@ public abstract class TaskRecord {
 
     /** 首次开跑打点(重复调用不覆盖——抢占恢复不算重新开始)。 */
     public final void markStarted(long gameTime) {
-        if (startedGameTime < 0) startedGameTime = gameTime;
+        if (startedGameTime < 0) {
+            startedGameTime = gameTime;
+            progress = TaskProgress.started(gameTime);
+        }
     }
     public final long getStartedGameTime() { return startedGameTime; }
+
+    public final TaskProgress getProgress() { return progress; }
+
+    /** Configure when task_status should flag material progress as stale. */
+    public final void setStallWarningTicks(long ticks) {
+        this.stallWarningTicks = Math.max(0, ticks);
+    }
+
+    public final long getStallWarningTicks() { return stallWarningTicks; }
+
+    /** Report fresh activity without claiming that the objective advanced. */
+    public final void reportActivity(long gameTime, String phase, String message,
+                                     Map<String, Object> metrics) {
+        long lastAdvance = progress == null ? gameTime : progress.advancedGameTime();
+        progress = new TaskProgress(phase, message, metrics, gameTime, lastAdvance);
+    }
+
+    /** Report both fresh activity and material progress toward the objective. */
+    public final void reportProgress(long gameTime, String phase, String message,
+                                     Map<String, Object> metrics) {
+        progress = new TaskProgress(phase, message, metrics, gameTime, gameTime);
+    }
 
     /** Called by {@code CompanionTickDispatcher} as the record transitions through lifecycle. */
     public final void setState(TaskState state) { this.state = state; }

@@ -1,7 +1,8 @@
 package com.dwinovo.numen.task;
 
-import com.google.gson.JsonObject;
+import com.google.gson.Gson;
 
+import java.util.LinkedHashMap;
 import java.util.Map;
 
 /**
@@ -37,6 +38,8 @@ public record TaskResult(boolean success,
                          boolean interrupted,
                          Map<String, Object> data) {
 
+    private static final Gson GSON = new Gson();
+
     public static TaskResult ok(String message, Map<String, Object> data) {
         return new TaskResult(true, message, false, false, data);
     }
@@ -67,21 +70,17 @@ public record TaskResult(boolean success,
      * tool-result conventions can read it without a custom system prompt.
      */
     public String toJson() {
-        JsonObject root = new JsonObject();
-        root.addProperty("success", success);
-        root.addProperty("message", message == null ? "" : message);
-        if (timedOut) root.addProperty("timed_out", true);
-        if (interrupted) root.addProperty("interrupted", true);
-        if (data != null && !data.isEmpty()) {
-            JsonObject dataObj = new JsonObject();
-            for (Map.Entry<String, Object> e : data.entrySet()) {
-                Object v = e.getValue();
-                if (v instanceof Number n) dataObj.addProperty(e.getKey(), n);
-                else if (v instanceof Boolean b) dataObj.addProperty(e.getKey(), b);
-                else if (v != null) dataObj.addProperty(e.getKey(), v.toString());
-            }
-            root.add("data", dataObj);
-        }
-        return root.toString();
+        return GSON.toJson(toData());
+    }
+
+    /** JSON-friendly data that preserves nested maps, lists, and primitive types. */
+    public Map<String, Object> toData() {
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("success", success);
+        out.put("message", message == null ? "" : message);
+        if (timedOut) out.put("timed_out", true);
+        if (interrupted) out.put("interrupted", true);
+        if (data != null && !data.isEmpty()) out.put("data", data);
+        return out;
     }
 }

@@ -31,8 +31,12 @@ import java.util.List;
 @com.dwinovo.numen.api.Internal
 public final class TaskQueue {
 
+    private static final int RECENT_LIMIT = 32;
+
     private final Deque<TaskRecord> pending = new ArrayDeque<>();
     private final Deque<TaskRecord> completed = new ArrayDeque<>();
+    /** Bounded terminal history so an external task_id never collapses to ambiguous "idle". */
+    private final Deque<TaskRecord> recent = new ArrayDeque<>();
 
     public void enqueue(TaskRecord record) {
         pending.addLast(record);
@@ -54,6 +58,7 @@ public final class TaskQueue {
     /** Move a record from in-flight to the outbox. Called from {@code CompanionTickDispatcher}. */
     public void complete(TaskRecord record) {
         completed.addLast(record);
+        remember(record);
     }
 
     /**
@@ -95,6 +100,31 @@ public final class TaskQueue {
         return null;
     }
 
+    /** Find a queued record by public id. */
+    public TaskRecord findPending(String taskId) {
+        if (taskId == null || taskId.isBlank()) return null;
+        for (TaskRecord r : pending) {
+            if (taskId.equals(r.publicId())) return r;
+        }
+        return null;
+    }
+
+    /** Find a recently completed record by public id, newest first. */
+    public TaskRecord findRecent(String taskId) {
+        if (taskId == null || taskId.isBlank()) return null;
+        var it = recent.descendingIterator();
+        while (it.hasNext()) {
+            TaskRecord r = it.next();
+            if (taskId.equals(r.publicId())) return r;
+        }
+        return null;
+    }
+
+    private void remember(TaskRecord record) {
+        recent.addLast(record);
+        while (recent.size() > RECENT_LIMIT) recent.removeFirst();
+    }
+
     /**
      * Cancel every pending record (mark TaskState.CANCELLED, move to outbox).
      * Called on entity removal / death so the agent loop can flush results
@@ -105,6 +135,7 @@ public final class TaskQueue {
             r.setState(TaskState.CANCELLED);
             r.setResult(TaskResult.cancelled(reason));
             completed.addLast(r);
+            remember(r);
         }
         pending.clear();
     }

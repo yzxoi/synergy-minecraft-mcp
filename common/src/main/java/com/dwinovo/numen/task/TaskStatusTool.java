@@ -1,12 +1,8 @@
 package com.dwinovo.numen.task;
 
-import com.dwinovo.numen.task.CompanionTickDispatcher;
-import com.dwinovo.numen.task.TaskRecord;
-import com.dwinovo.numen.task.TaskState;
 import com.dwinovo.numen.agent.tool.Schema;
 import com.dwinovo.numen.agent.tool.NumenTool;
 import com.dwinovo.numen.entity.NumenPlayer;
-import com.dwinovo.numen.task.TaskResult;
 import com.google.gson.JsonObject;
 
 import java.util.Map;
@@ -22,35 +18,37 @@ public final class TaskStatusTool implements NumenTool {
 
     @Override
     public String description() {
-        return "Read the background task's live state: id, what it is, running/queued, elapsed time "
-                + "and remaining time budget. Instant; says so when the body is idle. Normally you "
-                + "don't need this — completion arrives by itself as a task_finished event; use it "
-                + "when the owner asks how it's going, or before deciding to task_stop.";
+        return "Read a background task's structured snapshot: phase, progress metrics, stall signal, "
+                + "elapsed/budget time, and terminal result. Pass task_id to retrieve a recently "
+                + "completed external task; omit it for the body's current task.";
     }
 
     @Override
     public Map<String, Object> parameterSchema() {
-        return Schema.object().build();
+        return Schema.object()
+                .optionalString("task_id", "Optional task id returned when the action was accepted, e.g. t42. "
+                        + "Use it to retrieve the exact terminal result after the body becomes idle.")
+                .build();
     }
 
     @Override
     public void onServerCall(String toolCallId, JsonObject args, NumenPlayer companion, Consumer<String> reply) {
-        TaskRecord rec = CompanionTickDispatcher.asyncTaskFor(companion.getUUID());
+        String requested = args.has("task_id") && !args.get("task_id").isJsonNull()
+                ? args.get("task_id").getAsString().trim() : "";
+        TaskRecord rec = requested.isEmpty()
+                ? CompanionTickDispatcher.asyncTaskFor(companion.getUUID())
+                : CompanionTickDispatcher.taskById(companion.getUUID(), requested);
         if (rec == null) {
-            reply.accept(TaskResult.ok("身体空闲,没有后台任务。").toJson());
+            String message = requested.isEmpty()
+                    ? "身体空闲,没有后台任务。"
+                    : "没有找到任务 " + requested + "；它可能不存在或已超出最近任务保留窗口。";
+            reply.accept(TaskResult.ok(message, Map.of(
+                    "state", requested.isEmpty() ? "idle" : "unknown",
+                    "task_id", requested)).toJson());
             return;
         }
         long now = companion.level().getGameTime();
-        long elapsedS = rec.getStartedGameTime() >= 0 ? (now - rec.getStartedGameTime()) / 20 : 0;
-        long budgetLeftS = Math.max(0, rec.getDeadlineGameTime() - now) / 20;
-        String state = rec.getState() == TaskState.RUNNING ? "running" : "queued";
-        reply.accept(TaskResult.ok(
-                rec.publicId() + "(" + rec.describe() + ") " + state
-                        + ",已进行 " + elapsedS + "s,时间预算剩 " + budgetLeftS + "s。",
-                Map.of("task_id", rec.publicId(),
-                        "task", rec.getToolName(),
-                        "state", state,
-                        "elapsed_s", elapsedS,
-                        "budget_left_s", budgetLeftS)).toJson());
+        TaskSnapshot snapshot = TaskSnapshot.capture(rec, now);
+        reply.accept(TaskResult.ok(snapshot.summary(), snapshot.toData()).toJson());
     }
 }
