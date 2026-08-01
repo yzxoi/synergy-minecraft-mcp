@@ -168,7 +168,7 @@ public final class BuildStates {
         // {@link #strictItem},读的是图纸自己那份数据)。
         if (level != null && !state.hasBlockEntity()) {
             try {
-                var picked = state.getBlock().getCloneItemStack(level, pos, state);
+                var picked = state.getCloneItemStack(level, pos, false);
                 if (!picked.isEmpty()) {
                     return picked.getItem();
                 }
@@ -247,13 +247,13 @@ public final class BuildStates {
                 return null;
             }
             for (String side : new String[]{"front_text", "back_text"}) {
-                net.minecraft.nbt.CompoundTag text = out.getCompound(side);
-                if (!text.contains("messages", net.minecraft.nbt.Tag.TAG_LIST)) {
+                net.minecraft.nbt.CompoundTag text = out.getCompoundOrEmpty(side);
+                if (!text.contains("messages")) {
                     continue;
                 }
                 for (net.minecraft.nbt.Tag line
-                        : text.getList("messages", net.minecraft.nbt.Tag.TAG_STRING)) {
-                    if (hasClickEvent(line.getAsString())) {
+                        : text.getListOrEmpty("messages")) {
+                    if (hasClickEvent(line.asString().orElse(""))) {
                         return null;
                     }
                 }
@@ -273,7 +273,7 @@ public final class BuildStates {
         }
         try {
             var be = holder.newBlockEntity(net.minecraft.core.BlockPos.ZERO, state);
-            return be != null && be.onlyOpCanSetNbt();
+            return be != null && be.getType().onlyOpCanSetNbt();
         } catch (RuntimeException e) {
             return true;   // 造不出来就当它不安全
         }
@@ -282,8 +282,11 @@ public final class BuildStates {
     /** 这段文本组件里有点击事件吗(递归看子组件)——有就是个能跑命令的口子。 */
     private static boolean hasClickEvent(String json) {
         try {
-            var component = net.minecraft.network.chat.Component.Serializer.fromJson(
-                    json.isEmpty() ? "\"\"" : json, net.minecraft.core.RegistryAccess.EMPTY);
+            var component = net.minecraft.network.chat.ComponentSerialization.CODEC.parse(
+                    net.minecraft.core.RegistryAccess.EMPTY.createSerializationContext(
+                            com.mojang.serialization.JsonOps.INSTANCE),
+                    com.google.gson.JsonParser.parseString(json.isEmpty() ? "\"\"" : json))
+                    .result().orElse(null);
             return component != null && hasClickEvent(component);
         } catch (RuntimeException e) {
             return true;   // 读不懂的文本按有事件处理
@@ -325,7 +328,7 @@ public final class BuildStates {
         if (data == null || !data.contains("id")) {
             return null;
         }
-        String id = data.getString("id");
+        String id = data.getStringOr("id", "");
         if (!id.equals("minecraft:item_frame") && !id.equals("minecraft:glow_item_frame")
                 && !id.equals("minecraft:armor_stand") && !id.equals("minecraft:painting")) {
             return null;
@@ -426,7 +429,7 @@ public final class BuildStates {
         if (tag.isEmpty()) {
             return;   // 空槽位
         }
-        net.minecraft.world.item.ItemStack.parse(registries, tag)
+        parseStack(registries, tag)
                 .map(BuildStates::withUnsafeComponentsDiscarded)
                 .filter(s -> !s.isEmpty())
                 .ifPresent(out::add);
@@ -463,10 +466,12 @@ public final class BuildStates {
         if (tag.isEmpty()) {
             return null;
         }
-        var cleaned = net.minecraft.world.item.ItemStack.parse(registries, tag)
+        var cleaned = parseStack(registries, tag)
                 .map(BuildStates::withUnsafeComponentsDiscarded)
                 .filter(s -> !s.isEmpty());
-        return cleaned.isEmpty() ? null : cleaned.get().save(registries);
+        return cleaned.isEmpty() ? null : net.minecraft.world.item.ItemStack.CODEC.encodeStart(
+                registries.createSerializationContext(net.minecraft.nbt.NbtOps.INSTANCE), cleaned.get())
+                .result().orElse(null);
     }
 
     /** 把摆设身上带的东西整个拿掉——付不起的时候用,框空着比框里凭空多件东西好。 */
@@ -550,9 +555,18 @@ public final class BuildStates {
         net.minecraft.nbt.CompoundTag components = new net.minecraft.nbt.CompoundTag();
         components.put("minecraft:banner_patterns", safeData.get("patterns").copy());
         itemTag.put("components", components);
-        return net.minecraft.world.item.ItemStack.parse(registries, itemTag)
+        return parseStack(registries, itemTag)
                 .filter(s -> !s.isEmpty())
                 .orElse(null);
+    }
+
+    /** 1.21.11 统一通过 codec + registry ops 读取物品堆。 */
+    private static java.util.Optional<net.minecraft.world.item.ItemStack> parseStack(
+            net.minecraft.core.HolderLookup.Provider registries,
+            net.minecraft.nbt.CompoundTag tag) {
+        return net.minecraft.world.item.ItemStack.CODEC.parse(
+                registries.createSerializationContext(net.minecraft.nbt.NbtOps.INSTANCE), tag)
+                .result();
     }
 
     /**

@@ -368,7 +368,7 @@ public final class BuildCompanionTask extends AbstractCompanionTask<BuildTaskRec
     /** 背包里有几件满足这一笔要求的东西——口径由这笔要求自己说。 */
     private int countMatching(BuildTaskRecord.CellNeed need) {
         Inventory inventory = player.getInventory();
-        int limit = Math.min(PlayerInv.BUILDABLE_SLOTS, inventory.items.size());
+        int limit = Math.min(PlayerInv.BUILDABLE_SLOTS, inventory.getNonEquipmentItems().size());
         int n = 0;
         for (int i = 0; i < limit; i++) {
             ItemStack stack = inventory.getItem(i);
@@ -385,7 +385,7 @@ public final class BuildCompanionTask extends AbstractCompanionTask<BuildTaskRec
             return;
         }
         Inventory inventory = player.getInventory();
-        int limit = Math.min(PlayerInv.BUILDABLE_SLOTS, inventory.items.size());
+        int limit = Math.min(PlayerInv.BUILDABLE_SLOTS, inventory.getNonEquipmentItems().size());
         for (int i = 0; i < limit; i++) {
             ItemStack stack = inventory.getItem(i);
             if (!stack.isEmpty() && need.matches(stack)) {
@@ -1191,7 +1191,7 @@ public final class BuildCompanionTask extends AbstractCompanionTask<BuildTaskRec
                     com.dwinovo.numen.core.task.BuildStates.stripPayload(nbt);
                     skippedPayloads += carried.size();
                 }
-                boolean hangs = !"minecraft:armor_stand".equals(nbt.getString("id"));
+                boolean hangs = !"minecraft:armor_stand".equals(nbt.getStringOr("id", ""));
                 // 位置与锚点同源写入。读档时锚点要过一道 16 格闸门:锚点离 Pos 超过
                 // 16 格就被判成坏档丢掉,而丢掉之后重算碰撞箱会拿一个 null 坐标去算
                 // 中心点,当场 NPE、这只摆设静默消失。加载器把两个键都删了,所以这里
@@ -1211,22 +1211,22 @@ public final class BuildCompanionTask extends AbstractCompanionTask<BuildTaskRec
                 // 展示框存大写 Facing、按六向编码(它能挂在天花板和地板上)。混用的
                 // 后果是一半的墙面展示框转向错误,随后立不住掉落。
                 if (nbt.contains("facing")) {
-                    Direction facing = Direction.from2DDataValue(nbt.getByte("facing"));
+                    Direction facing = Direction.from2DDataValue(nbt.getByteOr("facing", (byte) 0));
                     nbt.putByte("facing", (byte) spawn.rotation().rotate(facing).get2DDataValue());
                 }
                 if (nbt.contains("Facing")) {
-                    Direction facing = Direction.from3DDataValue(nbt.getByte("Facing"));
+                    Direction facing = Direction.from3DDataValue(nbt.getByteOr("Facing", (byte) 0));
                     nbt.putByte("Facing", (byte) spawn.rotation().rotate(facing).get3DDataValue());
                 }
-                var created = net.minecraft.world.entity.EntityType.create(nbt, level);
-                if (created.isEmpty()) {
+                var entity = net.minecraft.world.entity.EntityType.loadEntityRecursive(
+                        nbt, level, net.minecraft.world.entity.EntitySpawnReason.LOAD, e -> e);
+                if (entity == null) {
                     continue;
                 }
-                var entity = created.get();
                 // 挂件的朝向已经在 NBT 里转好了;盔甲架不是挂件,它的朝向只有偏航角,
                 // 走基类那个纯函数版的 rotate(只返回旋转后的偏航角,不改任何字段)。
                 float yaw = hangs ? entity.getYRot() : entity.rotate(spawn.rotation());
-                entity.moveTo(spawn.x(), spawn.y(), spawn.z(), yaw, entity.getXRot());
+                entity.snapTo(spawn.x(), spawn.y(), spawn.z(), yaw, entity.getXRot());
                 entity.setUUID(java.util.UUID.randomUUID());   // 同一张图纸建两遍不能撞 UUID
                 level.addFreshEntity(entity);
                 if (pays) {
@@ -1254,7 +1254,8 @@ public final class BuildCompanionTask extends AbstractCompanionTask<BuildTaskRec
         if (!(player.level() instanceof ServerLevel level)) {
             return false;
         }
-        var type = net.minecraft.world.entity.EntityType.by(spawn.nbt());
+        var type = net.minecraft.world.entity.EntityType.byString(
+                spawn.nbt().getStringOr("id", ""));
         if (type.isEmpty()) {
             return false;
         }
@@ -1797,7 +1798,8 @@ public final class BuildCompanionTask extends AbstractCompanionTask<BuildTaskRec
             return;   // 任务中途被切成免耗材画像:记账即刻停手,别扣真方块
         }
         Inventory inventory = player.getInventory();
-        int limit = Math.min(PlayerInv.BUILDABLE_SLOTS, inventory.items.size());   // 与存量口径同源
+        int limit = Math.min(PlayerInv.BUILDABLE_SLOTS,
+                inventory.getNonEquipmentItems().size());   // 与存量口径同源
         for (int i = 0; i < limit; i++) {
             ItemStack stack = inventory.getItem(i);
             if (!stack.isEmpty() && stack.is(item)) {
@@ -1847,7 +1849,9 @@ public final class BuildCompanionTask extends AbstractCompanionTask<BuildTaskRec
             copy.putInt("x", pos.getX());
             copy.putInt("y", pos.getY());
             copy.putInt("z", pos.getZ());
-            be.loadWithComponents(copy, player.level().registryAccess());
+            be.loadWithComponents(net.minecraft.world.level.storage.TagValueInput.create(
+                    net.minecraft.util.ProblemReporter.DISCARDING,
+                    player.level().registryAccess(), copy));
             be.setChanged();
             // setChanged 只把区块标脏,不发同步包;而 PLACE_FLAGS 那一包在装数据
             // <b>之前</b>就已经发出去了,里面还没有方块实体的载荷。不补这一下,
@@ -1965,7 +1969,7 @@ public final class BuildCompanionTask extends AbstractCompanionTask<BuildTaskRec
      */
     private int strictCount(ItemStack want) {
         Inventory inventory = player.getInventory();
-        int limit = Math.min(PlayerInv.BUILDABLE_SLOTS, inventory.items.size());
+        int limit = Math.min(PlayerInv.BUILDABLE_SLOTS, inventory.getNonEquipmentItems().size());
         int n = 0;
         for (int i = 0; i < limit; i++) {
             ItemStack stack = inventory.getItem(i);
@@ -1982,7 +1986,7 @@ public final class BuildCompanionTask extends AbstractCompanionTask<BuildTaskRec
             return true;
         }
         Inventory inventory = player.getInventory();
-        int limit = Math.min(PlayerInv.BUILDABLE_SLOTS, inventory.items.size());
+        int limit = Math.min(PlayerInv.BUILDABLE_SLOTS, inventory.getNonEquipmentItems().size());
         for (int i = 0; i < limit; i++) {
             ItemStack stack = inventory.getItem(i);
             if (!stack.isEmpty() && ItemStack.isSameItemSameComponents(stack, want)) {

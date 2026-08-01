@@ -103,14 +103,14 @@ public final class BuildPalette {
                     + " — block_id takes a plain block id; put the state in `properties`"
                     + " (e.g. block_id \"spruce_stairs\" with properties {facing: south})");
         }
-        var rl = net.minecraft.resources.ResourceLocation.tryParse(trimmed);
+        var rl = net.minecraft.resources.Identifier.tryParse(trimmed);
         if (rl == null) {
             throw new IllegalArgumentException("not a valid block id: " + trimmed);
         }
         if (!net.minecraft.core.registries.BuiltInRegistries.BLOCK.containsKey(rl)) {
             throw new IllegalArgumentException("unknown block: " + trimmed);
         }
-        Block block = net.minecraft.core.registries.BuiltInRegistries.BLOCK.get(rl);
+        Block block = net.minecraft.core.registries.BuiltInRegistries.BLOCK.getValue(rl);
         // 能不能建走同一个判据(图纸入口那边拿它当跳过条件,这边拿它当拒绝理由)
         String no = com.dwinovo.numen.core.task.BuildStates
                 .unbuildableReason(block.defaultBlockState());
