@@ -22,6 +22,10 @@ public record WorkProfile(
     public static final WorkProfile CREATIVE = new WorkProfile(true, false, false, true, true);
 
     public static WorkProfile of(ServerPlayer body) {
-        return body.getAbilities().instabuild ? CREATIVE : SURVIVAL;
+        // Production players always have abilities. The survival fallback also
+        // keeps planner-only shells (unit tests and offline simulations) honest
+        // instead of treating missing state as creative authority.
+        return body != null && body.getAbilities() != null && body.getAbilities().instabuild
+                ? CREATIVE : SURVIVAL;
     }
 }

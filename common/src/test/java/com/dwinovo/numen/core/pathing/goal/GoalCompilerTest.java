@@ -66,15 +66,14 @@ class GoalCompilerTest {
     }
 
     @Test
-    void mineFieldMakesEveryOreSacredButNotDrops() {
+    void mineFieldKeepsTargetsBreakableAndIncludesDrops() {
         BlockPos ore2 = T.east(4);
         BlockPos drop = T.north(2);
         GoalCompiler.Compiled c = GoalCompiler.mineField(
                 List.of(GoalCompiler.Stance.at(T, 2), GoalCompiler.Stance.at(ore2, 0)),
                 List.of(drop));
-        assertTrue(c.sacred().contains(T.asLong()));
-        assertTrue(c.sacred().contains(ore2.asLong()));
-        assertEquals(2, c.sacred().size(), "drops are items, not sacred blocks");
+        assertTrue(c.sacred().isEmpty(),
+                "targets stay breakable so a route through a trunk or ore vein remains feasible");
         assertTrue(c.goal().isAt(T.below()), "stance band member satisfies");
         assertTrue(c.goal().isAt(ore2), "exact stance member satisfies");
         assertFalse(c.goal().isAt(ore2.below()), "maxBelow=0 stance rejects one-below");
@@ -83,12 +82,11 @@ class GoalCompilerTest {
 
     @Test
     void shiftedStanceProtectsTheOreNotTheBase() {
-        // A run's top block anchors its stance one lower — the SACRED cell must
-        // still be the ore itself, while the feet band hangs from the base.
+        // A run's top block anchors its stance one lower. Mining targets remain
+        // breakable by the route; only the feet band hangs from the shifted base.
         GoalCompiler.Compiled c = GoalCompiler.mineField(
                 List.of(new GoalCompiler.Stance(T, T.below(), 1)), List.of());
-        assertTrue(c.sacred().contains(T.asLong()), "ore is sacred");
-        assertFalse(c.sacred().contains(T.below().asLong()), "stance base is not");
+        assertTrue(c.sacred().isEmpty(), "ore and stance base both remain routable");
         assertTrue(c.goal().isAt(T.below()), "band top = base");
         assertTrue(c.goal().isAt(T.below(2)), "band floor = base-1");
         assertFalse(c.goal().isAt(T), "the ore cell itself is not a stance here");

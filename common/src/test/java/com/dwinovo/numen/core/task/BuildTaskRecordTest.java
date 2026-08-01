@@ -152,7 +152,7 @@ class BuildTaskRecordTest {
     }
 
     @Test
-    void targetMatchesEveryRequestedStateProperty() {
+    void targetIgnoresWorldDerivedStateProperties() {
         assumeTrue(booted, "Minecraft 引导不可用,跳过建造规则钉桩");
         BlockState desired = Blocks.OAK_STAIRS.defaultBlockState()
                 .setValue(BlockStateProperties.HORIZONTAL_FACING, Direction.NORTH)
@@ -161,7 +161,8 @@ class BuildTaskRecordTest {
                 Blocks.OAK_STAIRS.asItem(), BlockPos.ZERO, "oak_stairs", Direction.NORTH, null, null);
 
         assertTrue(target.matches(desired));
-        assertFalse(target.matches(desired.setValue(BlockStateProperties.WATERLOGGED, true)));
+        assertTrue(target.matches(desired.setValue(BlockStateProperties.WATERLOGGED, true)),
+                "waterlogged is derived from the world, not authored build geometry");
     }
 
     @Test
@@ -192,13 +193,14 @@ class BuildTaskRecordTest {
     void buildIgnoreDirectionDoesNotIgnoreUnlistedProperties() {
         assumeTrue(booted, "Minecraft 引导不可用,跳过建造规则钉桩");
         NavSettings.get().buildIgnoreDirection = true;
-        BlockState desired = Blocks.OAK_STAIRS.defaultBlockState()
-                .setValue(BlockStateProperties.HORIZONTAL_FACING, Direction.NORTH)
-                .setValue(BlockStateProperties.WATERLOGGED, false);
+        BlockState desired = Blocks.SMOOTH_STONE_SLAB.defaultBlockState()
+                .setValue(BlockStateProperties.SLAB_TYPE, SlabType.BOTTOM);
         BuildTaskRecord.Target target = new BuildTaskRecord.Target(desired,
-                Blocks.OAK_STAIRS.asItem(), BlockPos.ZERO, "oak_stairs", null, null, null);
+                Blocks.SMOOTH_STONE_SLAB.asItem(), BlockPos.ZERO, "smooth_stone_slab",
+                null, null, null);
 
-        assertFalse(target.matches(desired.setValue(BlockStateProperties.WATERLOGGED, true)));
+        assertFalse(target.matches(desired.setValue(BlockStateProperties.SLAB_TYPE, SlabType.TOP)),
+                "buildIgnoreDirection must not ignore authored top/bottom geometry");
     }
 
     @Test
@@ -234,9 +236,10 @@ class BuildTaskRecordTest {
 
         assertEquals(0.0, ctx.costOfPlacingAt(pos.getX(), pos.getY(), pos.getZ(),
                 Blocks.AIR.defaultBlockState()));
-        assertEquals(NavSettings.get().breakCorrectBlockPenaltyMultiplier,
+        assertEquals(8.0,
                 ctx.breakCostMultiplierAt(pos.getX(), pos.getY(), pos.getZ(),
-                        Blocks.OBSIDIAN.defaultBlockState()));
+                        Blocks.OBSIDIAN.defaultBlockState()),
+                "a correct build cell is expensive but still breakable as an emergency exit");
         assertEquals(1.0, ctx.breakCostMultiplierAt(pos.getX(), pos.getY(), pos.getZ(),
                 Blocks.DIRT.defaultBlockState()));
     }
@@ -295,6 +298,5 @@ class BuildTaskRecordTest {
         @Override public int getMinY() { return -64; }
     }
 }
-
 
 

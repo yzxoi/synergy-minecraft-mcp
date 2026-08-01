@@ -261,7 +261,8 @@ final class MovementPlacement {
         // 免耗材画像的"伸手进创造物品栏":背包连一块耗材都没有时自动补一组
         // 泥土——原版创造玩家放置也得先手持方块,真人是从创造栏抓,假玩家
         // 没有那个 GUI,这里就是那只手。生存画像不进此分支。
-        if (player.hasInfiniteMaterials() && !hasAnyThrowaway(player, acceptable)) {
+        if (com.dwinovo.numen.core.task.WorkProfile.of(player).freeMaterials()
+                && !hasAnyThrowaway(player, acceptable)) {
             ItemStack restock = new ItemStack(net.minecraft.world.item.Items.DIRT, 64);
             if (!inventory.add(restock)) {
                 return false;   // 背包满还没耗材:罕见,按无料处理
@@ -387,4 +388,3 @@ final class MovementPlacement {
         return player.getEyePosition();
     }
 }
-

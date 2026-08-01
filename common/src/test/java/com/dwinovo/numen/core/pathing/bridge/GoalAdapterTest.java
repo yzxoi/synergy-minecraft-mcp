@@ -226,7 +226,8 @@ class GoalAdapterTest {
         GoalCompiler.Compiled mine = GoalCompiler.mineField(
                 List.of(GoalCompiler.Stance.at(T, 1)), List.of(T.offset(2, 0, 2)));
         assertInstanceOf(GoalComposite.class, mine.engineGoal());
-        assertTrue(mine.sacred().contains(T.asLong()));
+        assertTrue(mine.sacred().isEmpty(),
+                "mining targets stay breakable so untouched columns do not make the goal unreachable");
         // 成员判定与旧词表目标一致(矿柱带 + 掉落物邻域)
         assertSameMembership(mine.goal(), mine.engineGoal());
     }
