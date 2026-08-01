@@ -2,9 +2,9 @@ package com.dwinovo.numen.entity;
 
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.TicketType;
+import net.minecraft.core.Registry;
+import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.world.level.ChunkPos;
-
-import java.util.Comparator;
 
 /**
  * Keeps a small, self-expiring pad of chunks loaded and ticking around a companion,
@@ -43,8 +43,13 @@ public final class CompanionChunkLoader {
      */
     private static final int TIMEOUT_TICKS = 40;
 
-    private static final TicketType<ChunkPos> TICKET =
-            TicketType.create("numen_companion", Comparator.comparingLong(ChunkPos::toLong), TIMEOUT_TICKS);
+    private static final TicketType TICKET = Registry.register(
+            BuiltInRegistries.TICKET_TYPE,
+            "numen_api:companion",
+            new TicketType(TIMEOUT_TICKS,
+                    TicketType.FLAG_LOADING
+                            | TicketType.FLAG_SIMULATION
+                            | TicketType.FLAG_KEEP_DIMENSION_ACTIVE));
 
     private CompanionChunkLoader() {}
 
@@ -92,7 +97,7 @@ public final class CompanionChunkLoader {
             }
             st.chunk = packed;
             st.countdown = REFRESH_TICKS;
-            level.getChunkSource().addRegionTicket(TICKET, pos, RADIUS, pos);
+            level.getChunkSource().addTicketWithRadius(TICKET, pos, RADIUS);
         }
     }
 }
