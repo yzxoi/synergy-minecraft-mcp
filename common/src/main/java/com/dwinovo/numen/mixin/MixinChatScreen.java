@@ -5,6 +5,7 @@ import com.dwinovo.numen.client.chat.NumenChatRouter;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.components.EditBox;
 import net.minecraft.client.gui.screens.ChatScreen;
+import net.minecraft.client.input.KeyEvent;
 
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Shadow;
@@ -33,9 +34,9 @@ public abstract class MixinChatScreen {
     }
 
     @Inject(method = "keyPressed", at = @At("HEAD"), cancellable = true)
-    private void numen$tabCompleteCompanion(int keyCode, int scanCode, int modifiers,
+    private void numen$tabCompleteCompanion(KeyEvent event,
                                             CallbackInfoReturnable<Boolean> cir) {
-        if (keyCode == 258 && NumenChatRouter.tabComplete(input)) {
+        if (event.key() == 258 && NumenChatRouter.tabComplete(input)) {
             cir.setReturnValue(true);
         }
     }
