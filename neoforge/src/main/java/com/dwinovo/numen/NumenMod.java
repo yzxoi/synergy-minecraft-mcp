@@ -6,6 +6,8 @@ import com.dwinovo.numen.platform.NeoForgeNetworkChannel;
 import com.dwinovo.numen.platform.Services;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.server.level.TicketType;
+import net.minecraft.core.registries.BuiltInRegistries;
 import net.neoforged.bus.api.IEventBus;
 import net.neoforged.fml.ModContainer;
 import net.neoforged.fml.common.Mod;
@@ -13,11 +15,22 @@ import net.neoforged.fml.config.ModConfig;
 import net.neoforged.neoforge.common.NeoForge;
 import net.neoforged.neoforge.event.entity.player.PlayerEvent;
 import net.neoforged.neoforge.network.event.RegisterPayloadHandlersEvent;
+import net.neoforged.neoforge.registries.DeferredRegister;
+
+import java.util.function.Supplier;
 
 @Mod(Constants.MOD_ID)
 public class NumenMod {
 
+    private static final DeferredRegister<TicketType> TICKET_TYPES =
+            DeferredRegister.create(BuiltInRegistries.TICKET_TYPE, Constants.MOD_ID);
+    private static final Supplier<TicketType> COMPANION_TICKET = TICKET_TYPES.register(
+            "companion", com.dwinovo.numen.entity.CompanionChunkLoader::createTicketType);
+
     public NumenMod(IEventBus eventBus, ModContainer container) {
+        TICKET_TYPES.register(eventBus);
+        com.dwinovo.numen.entity.CompanionChunkLoader.bindTicket(COMPANION_TICKET);
+
         eventBus.addListener(NumenMod::registerPayloads);
 
         // Register the TOML config spec — NeoForge handles file creation +

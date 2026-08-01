@@ -2,9 +2,10 @@ package com.dwinovo.numen.entity;
 
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.TicketType;
-import net.minecraft.core.Registry;
-import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.world.level.ChunkPos;
+
+import java.util.Objects;
+import java.util.function.Supplier;
 
 /**
  * Keeps a small, self-expiring pad of chunks loaded and ticking around a companion,
@@ -43,15 +44,36 @@ public final class CompanionChunkLoader {
      */
     private static final int TIMEOUT_TICKS = 40;
 
-    private static final TicketType TICKET = Registry.register(
-            BuiltInRegistries.TICKET_TYPE,
-            "numen_api:companion",
-            new TicketType(TIMEOUT_TICKS,
-                    TicketType.FLAG_LOADING
-                            | TicketType.FLAG_SIMULATION
-                            | TicketType.FLAG_KEEP_DIMENSION_ACTIVE));
+    /**
+     * Loader-owned registry handle. Ticket types are a frozen registry in 1.21.11,
+     * so this class must never try to register one on the first server tick.
+     */
+    private static Supplier<TicketType> ticket;
 
     private CompanionChunkLoader() {}
+
+    /** Value factory shared by Fabric's eager registration and NeoForge's deferred one. */
+    public static TicketType createTicketType() {
+        return new TicketType(TIMEOUT_TICKS,
+                TicketType.FLAG_LOADING
+                        | TicketType.FLAG_SIMULATION
+                        | TicketType.FLAG_KEEP_DIMENSION_ACTIVE);
+    }
+
+    /** Bind the platform registration handle during mod construction, before any world starts. */
+    public static void bindTicket(Supplier<TicketType> registeredTicket) {
+        if (ticket != null) {
+            throw new IllegalStateException("companion ticket type already bound");
+        }
+        ticket = Objects.requireNonNull(registeredTicket, "registeredTicket");
+    }
+
+    private static TicketType ticket() {
+        if (ticket == null) {
+            throw new IllegalStateException("companion ticket type was not registered by the loader");
+        }
+        return ticket.get();
+    }
 
     /** 运行期总开关(诊断 A/B 用):关掉后 {@link #refresh} 变空操作,已有票据 40 tick 内自然过期。
      *  服务端主线程读写;volatile 仅为命令线程可见性兜底。 */
@@ -97,7 +119,7 @@ public final class CompanionChunkLoader {
             }
             st.chunk = packed;
             st.countdown = REFRESH_TICKS;
-            level.getChunkSource().addTicketWithRadius(TICKET, pos, RADIUS);
+            level.getChunkSource().addTicketWithRadius(ticket(), pos, RADIUS);
         }
     }
 }

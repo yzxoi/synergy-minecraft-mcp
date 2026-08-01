@@ -2,12 +2,24 @@ package com.dwinovo.numen;
 
 import com.dwinovo.numen.network.NumenNetwork;
 import net.fabricmc.api.ModInitializer;
+import net.minecraft.core.Registry;
+import net.minecraft.core.registries.BuiltInRegistries;
+import net.minecraft.resources.Identifier;
+import net.minecraft.server.level.TicketType;
 import net.minecraft.server.level.ServerPlayer;
 
 public class NumenMod implements ModInitializer {
 
     @Override
     public void onInitialize() {
+        // 1.21.11 freezes the ticket-type registry before the first world tick.
+        // Register eagerly in the loader lifecycle; CompanionChunkLoader only consumes it.
+        TicketType companionTicket = Registry.register(
+                BuiltInRegistries.TICKET_TYPE,
+                Identifier.fromNamespaceAndPath(Constants.MOD_ID, "companion"),
+                com.dwinovo.numen.entity.CompanionChunkLoader.createTicketType());
+        com.dwinovo.numen.entity.CompanionChunkLoader.bindTicket(() -> companionTicket);
+
         NumenNetwork.register();
 
         // Dev: /numen_summon — create a companion fake player at the caller.
