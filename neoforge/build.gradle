@@ -47,7 +47,14 @@ neoForge {
     }
 }
 
-sourceSets.main.resources { srcDir 'src/generated/resources' }
+sourceSets.main {
+    // NeoForge 21.11 removed the annotation-based @GameTest/@BeforeBatch API in
+    // favour of RegisterGameTestsEvent + registry-backed GameTestInstance data.
+    // Keep the migrated 1.21.1 suite in-tree as the rewrite source, but do not
+    // ship or compile it as production code until it uses the new registry API.
+    java.exclude 'com/dwinovo/numen/core/gametest/CompanionGameTests.java'
+    resources { srcDir 'src/generated/resources' }
+}
 
 // Implement mcgradleconventions loader attribute
 def loaderAttribute = Attribute.of('io.github.mcgradleconventions.loader', String)
