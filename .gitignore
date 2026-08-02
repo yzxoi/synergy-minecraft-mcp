@@ -1,0 +1,12 @@
+.DS_Store
+.idea/
+.vscode/
+**/.gradle/
+**/build/
+**/runs/
+**/logs/
+**/crash-reports/
+**/config/numen/providers.json
+**/config/numen/models.json
+**/config/numen/mcp_server.json
+**/config/numen/mcp_clients.json
