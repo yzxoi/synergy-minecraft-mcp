@@ -57,7 +57,7 @@ class McpServerTest {
     void pingAndToolsListReturnJsonRpcResults() throws Exception {
         start("");
 
-        JsonObject ping = json(post(request(2, "ping", "{}"), null, null));
+        JsonObject ping = json(post(request(2, "ping", "{}"), PROTOCOL_VERSION, null));
         assertTrue(ping.getAsJsonObject("result").isEmpty());
 
         JsonObject listed = json(post(request(3, "tools/list", "{}"), PROTOCOL_VERSION, null));
@@ -86,12 +86,178 @@ class McpServerTest {
         HttpResponse<String> missing = post(request(1, "ping", "{}"), null, null);
         assertEquals(401, missing.statusCode());
 
-        HttpResponse<String> accepted = post(request(1, "ping", "{}"), null, "Bearer secret-token");
+        HttpResponse<String> accepted = post(request(1, "ping", "{}"), PROTOCOL_VERSION,
+                "Bearer secret-token");
         assertEquals(200, accepted.statusCode());
     }
 
+    @Test
+    void queryTokenMustBeAnExactDecodedParameter() throws Exception {
+        start("a+b");
+
+        assertEquals(401, postTo(endpoint + "?x=token%3Da%2Bb", request(1, "ping", "{}"),
+                null, null, null).statusCode());
+        assertEquals(401, postTo(endpoint + "?token=a%2Bb-extra", request(1, "ping", "{}"),
+                null, null, null).statusCode());
+        assertEquals(200, postTo(endpoint + "?token=a%2Bb", request(1, "ping", "{}"),
+                PROTOCOL_VERSION, null, null).statusCode());
+    }
+
+    @Test
+    void presentOriginMustBeLocalOrExplicitlyAllowed() throws Exception {
+        start("");
+        String localOrigin = "http://localhost:" + endpoint.getPort();
+
+        assertEquals(200, postTo(endpoint.toString(), request(1, "ping", "{}"),
+                PROTOCOL_VERSION, null, localOrigin).statusCode());
+        assertEquals(403, postTo(endpoint.toString(), request(1, "ping", "{}"),
+                PROTOCOL_VERSION, null, "https://evil.example").statusCode());
+
+        server.stop();
+        start("", List.of("https://trusted.example"));
+        assertEquals(200, postTo(endpoint.toString(), request(1, "ping", "{}"),
+                PROTOCOL_VERSION, null, "https://trusted.example").statusCode());
+    }
+
+    @Test
+    void initializeChoosesSupportedVersionInsteadOfEchoingClientInput() throws Exception {
+        start("");
+
+        HttpResponse<String> response = post("""
+                {"jsonrpc":"2.0","id":1,"method":"initialize","params":{
+                  "protocolVersion":"future-version",
+                  "capabilities":{},
+                  "clientInfo":{"name":"test-client","version":"1.0"}
+                }}
+                """, null, null);
+
+        assertEquals(200, response.statusCode());
+        assertEquals(PROTOCOL_VERSION,
+                json(response).getAsJsonObject("result").get("protocolVersion").getAsString());
+    }
+
+    @Test
+    void unsupportedProtocolHeaderGetsHttp400() throws Exception {
+        start("");
+
+        HttpResponse<String> response = post(request(1, "ping", "{}"), "future-version", null);
+
+        assertEquals(400, response.statusCode());
+        assertError(response, -32600, "unsupported MCP protocol version");
+    }
+
+    @Test
+    void missingProtocolHeaderGetsHttp400AfterInitialization() throws Exception {
+        start("");
+
+        HttpResponse<String> response = post(request(1, "ping", "{}"), null, null);
+
+        assertEquals(400, response.statusCode());
+        assertError(response, -32600, "unsupported MCP protocol version");
+    }
+
+    @Test
+    void malformedJsonAndInvalidShapesAreProtocolErrors() throws Exception {
+        start("");
+
+        HttpResponse<String> parseError = post("{broken", null, null);
+        assertEquals(400, parseError.statusCode());
+        assertError(parseError, -32700, "parse error");
+
+        HttpResponse<String> scalar = post("42", null, null);
+        assertEquals(400, scalar.statusCode());
+        assertError(scalar, -32600, "invalid request");
+
+        HttpResponse<String> batch = post("[" + request(1, "ping", "{}") + "]", null, null);
+        assertEquals(400, batch.statusCode());
+        assertError(batch, -32600, "invalid request");
+
+        HttpResponse<String> badId = post("""
+                {"jsonrpc":"2.0","id":true,"method":"ping","params":{}}
+                """, null, null);
+        assertEquals(400, badId.statusCode());
+        assertError(badId, -32600, "invalid request");
+    }
+
+    @Test
+    void invalidMcpParamsReturnInvalidParamsWithoutHttp500() throws Exception {
+        start("");
+
+        HttpResponse<String> wrongShape = post("""
+                {"jsonrpc":"2.0","id":7,"method":"tools/call","params":[]}
+                """, PROTOCOL_VERSION, null);
+        assertEquals(200, wrongShape.statusCode());
+        assertEquals(7, json(wrongShape).get("id").getAsInt());
+        assertEquals(-32602, json(wrongShape).getAsJsonObject("error").get("code").getAsInt());
+
+        HttpResponse<String> missingInitializeFields = post("""
+                {"jsonrpc":"2.0","id":8,"method":"initialize","params":{}}
+                """, null, null);
+        assertEquals(200, missingInitializeFields.statusCode());
+        assertEquals(-32602,
+                json(missingInitializeFields).getAsJsonObject("error").get("code").getAsInt());
+    }
+
+    @Test
+    void validToolsCallKeepsFailuresInsideToolResultEnvelope() throws Exception {
+        start("");
+
+        HttpResponse<String> response = post("""
+                {"jsonrpc":"2.0","id":9,"method":"tools/call","params":{
+                  "name":"delete_companion","arguments":{}
+                }}
+                """, PROTOCOL_VERSION, null);
+
+        assertEquals(200, response.statusCode());
+        JsonObject frame = json(response);
+        assertFalse(frame.has("error"));
+        JsonObject result = frame.getAsJsonObject("result");
+        assertTrue(result.get("isError").getAsBoolean());
+        assertTrue(result.getAsJsonArray("content").get(0).getAsJsonObject()
+                .get("text").getAsString().contains("no such companion"));
+    }
+
+    @Test
+    void oversizedRequestIsRejectedBeforeJsonParsing() throws Exception {
+        start("");
+        String oversized = "{\"value\":\"" + "a".repeat(McpServer.MAX_REQUEST_BODY_BYTES) + "\"}";
+
+        HttpResponse<String> response = post(oversized, null, null);
+
+        assertEquals(413, response.statusCode());
+        assertEquals("", response.body());
+    }
+
+    @Test
+    void wellFormedJsonRpcResponseIsAcceptedAsTransportInput() throws Exception {
+        start("");
+
+        HttpResponse<String> response = post("""
+                {"jsonrpc":"2.0","id":"server-request","result":{}}
+                """, PROTOCOL_VERSION, null);
+
+        assertEquals(202, response.statusCode());
+        assertEquals("", response.body());
+    }
+
+    @Test
+    void serverCanStopAndRestartOnFreshEphemeralPort() throws Exception {
+        start("");
+        assertEquals(200, post(request(1, "ping", "{}"), PROTOCOL_VERSION, null).statusCode());
+
+        server.stop();
+        server.start();
+        endpoint = URI.create("http://127.0.0.1:" + server.port() + "/mcp");
+
+        assertEquals(200, post(request(2, "ping", "{}"), PROTOCOL_VERSION, null).statusCode());
+    }
+
     private void start(String token) throws Exception {
-        McpConfig config = new McpConfig(false, "127.0.0.1", 0, token, 5, List.of());
+        start(token, List.of());
+    }
+
+    private void start(String token, List<String> allowedOrigins) throws Exception {
+        McpConfig config = new McpConfig(false, "127.0.0.1", 0, token, 5, List.of(), allowedOrigins);
         server = new McpServer(config);
         server.start();
         endpoint = URI.create("http://127.0.0.1:" + server.port() + "/mcp");
@@ -99,13 +265,19 @@ class McpServerTest {
 
     private HttpResponse<String> post(String body, String protocolVersion, String authorization)
             throws Exception {
-        HttpRequest.Builder builder = HttpRequest.newBuilder(endpoint)
+        return postTo(endpoint.toString(), body, protocolVersion, authorization, null);
+    }
+
+    private HttpResponse<String> postTo(String uri, String body, String protocolVersion,
+                                        String authorization, String origin) throws Exception {
+        HttpRequest.Builder builder = HttpRequest.newBuilder(URI.create(uri))
                 .timeout(Duration.ofSeconds(5))
                 .header("Accept", "application/json, text/event-stream")
                 .header("Content-Type", "application/json")
                 .POST(HttpRequest.BodyPublishers.ofString(body));
         if (protocolVersion != null) builder.header("MCP-Protocol-Version", protocolVersion);
         if (authorization != null) builder.header("Authorization", authorization);
+        if (origin != null) builder.header("Origin", origin);
         return client.send(builder.build(), HttpResponse.BodyHandlers.ofString());
     }
 
@@ -123,5 +295,11 @@ class McpServerTest {
             if (name.equals(tool.getAsJsonObject().get("name").getAsString())) return true;
         }
         return false;
+    }
+
+    private static void assertError(HttpResponse<String> response, int code, String message) {
+        JsonObject error = json(response).getAsJsonObject("error");
+        assertEquals(code, error.get("code").getAsInt());
+        assertEquals(message, error.get("message").getAsString());
     }
 }

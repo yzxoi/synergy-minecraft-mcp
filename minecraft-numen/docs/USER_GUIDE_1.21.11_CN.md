@@ -293,11 +293,16 @@ Numen 不是把一句话直接翻译成一个巨大动作，而是“感知 → 
   "port": 8765,
   "token": "",
   "call_timeout_seconds": 300,
-  "hidden_tools": ["todowrite", "load_skill"]
+  "hidden_tools": ["todowrite", "load_skill"],
+  "allowed_origins": []
 }
 ```
 
-面板只能即时切换启用状态；修改 host、port、token、超时或隐藏工具后，应重启游戏客户端。
+面板只能即时切换启用状态；修改 host、port、token、超时、隐藏工具或允许来源后，应重启游戏客户端。
+
+`allowed_origins` 只用于额外放行带 `Origin` 请求头的浏览器来源，按完整 origin
+（协议、主机和端口）精确匹配，例如 `https://agent.example.com`。原生 MCP 客户端通常不发送
+`Origin`，无需配置；当前 MCP 端点自身的 origin 和等价本机回环地址也会自动允许。不要使用通配符。
 
 只在本机使用时保留 `127.0.0.1`。若改为局域网地址或 `0.0.0.0`，必须设置高强度随机 token、限制防火墙来源，并明确理解外部调用者可以挖掘、建造、攻击和永久删除同伴。
 
