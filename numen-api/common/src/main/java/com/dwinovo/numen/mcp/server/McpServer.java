@@ -71,7 +71,9 @@ public final class McpServer {
                     + "Save it and call task_status with that task_id until data.terminal=true; "
                     + "then inspect data.state and data.result and use perception to verify the world. "
                     + "MCP callers do not receive task_finished events (that event is for the built-in brain only). "
-                    + "Do not resend the same action while its task is non-terminal; use task_stop to cancel it.";
+                    + "Do not resend the same action while its task is non-terminal; use task_stop to cancel it. "
+                    + "Ignore any task_finished or no-poll wording in the engine details below: that wording "
+                    + "applies only to the built-in brain, not to this MCP transport.";
 
     /**
      * Sent to the connecting agent in the {@code initialize} handshake (MCP's
