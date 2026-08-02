@@ -137,19 +137,30 @@ public final class MoveToCompanionTask extends AbstractCompanionTask<MoveToTaskR
         // BLOCK targets go through the compiled front door so the target cell is
         // SACRED when solid — the route may neither dig through nor bury the very
         // block it was asked to reach. COLUMN/YLEVEL have no block objective.
-        nav = r.kind == MoveToTaskRecord.Kind.BLOCK
-                ? PlayerNav.to(player, this::blockCompiled, WALK_SPEED, this::reached)
-                : PlayerNav.toGoal(player, this::goal, WALK_SPEED, this::reached);
+        createNavigation();
         com.dwinovo.numen.Constants.LOG.info(
                 "[numen-task] goto start kind={} target={},{},{} solid={}",
                 r.kind, bx, by, bz,
                 r.kind == MoveToTaskRecord.Kind.BLOCK && targetCellSolid());
-        // Highlight the ACTUAL requested cell (not the path's best-effort end) so the overlay
-        // box sits on the real target — e.g. a BLOCK goal under/over water that the path can
-        // only approach to the surface. The goal itself is always rendered, not the plan's end.
+    }
+
+    /** Create a fresh navigation instance for the current intent. */
+    private void createNavigation() {
+        nav = switch (r.kind) {
+            case BLOCK -> PlayerNav.to(player, this::blockCompiled, WALK_SPEED, this::reached);
+            case FIND -> PlayerNav.to(player, () -> findContract, WALK_SPEED, this::reached);
+            default -> PlayerNav.toGoal(player, this::goal, WALK_SPEED, this::reached);
+        };
         if (r.kind == MoveToTaskRecord.Kind.BLOCK) {
             nav.setHighlights(() -> java.util.List.of(blockTarget));
+        } else if (r.kind == MoveToTaskRecord.Kind.FIND) {
+            nav.setHighlights(() -> java.util.List.copyOf(candidates));
         }
+    }
+
+    /** Task completion requires both the navigation marker and stable arrival. */
+    static boolean acceptsArrival(boolean navArrived, boolean taskReached) {
+        return navArrived && taskReached;
     }
 
     /** The navigation goal for this move's kind. */
@@ -279,7 +290,25 @@ public final class MoveToCompanionTask extends AbstractCompanionTask<MoveToTaskR
         }
         return switch (nav.tick()) {
             case RUNNING -> TaskState.RUNNING;
-            case ARRIVED -> TaskState.SUCCESS;
+            case ARRIVED -> {
+                // PlayerNav also observes the engine goal. Its ARRIVED marker
+                // can precede this task's stricter supported-feet predicate,
+                // especially during a jump or scaffold/sneak transition.
+                if (acceptsArrival(true, reached())) {
+                    yield TaskState.SUCCESS;
+                }
+                nav.stop();
+                if (nearRetried) {
+                    NavGoal retry = nearRetryGoal();
+                    nav = PlayerNav.toGoal(player, () -> retry, WALK_SPEED,
+                            this::closeEnoughToSucceed);
+                } else {
+                    createNavigation();
+                }
+                reportActivity("navigating", "navigation reached an unsupported cell; waiting for stable footing",
+                        Map.of("x", player.getX(), "y", player.getY(), "z", player.getZ()));
+                yield TaskState.RUNNING;
+            }
             case FAILED -> {
                 // FIND:打不通就近候选 -> 除名,朝余下候选重开导航
                 if (r.kind == MoveToTaskRecord.Kind.FIND && candidates.size() > 1) {
@@ -289,8 +318,7 @@ public final class MoveToCompanionTask extends AbstractCompanionTask<MoveToTaskR
                     }
                     rebuildFindContract();
                     stopNav();
-                    nav = PlayerNav.to(player, () -> findContract, WALK_SPEED, this::reached);
-                    nav.setHighlights(() -> java.util.List.copyOf(candidates));
+                    createNavigation();
                     yield TaskState.RUNNING;
                 }
                 // The planner can't get closer. In water, keep waiting while the body is
@@ -410,8 +438,7 @@ public final class MoveToCompanionTask extends AbstractCompanionTask<MoveToTaskR
             reportProgress("planning", "found candidate blocks and compiling a route",
                     Map.of("candidates", candidates.size(), "target", r.block));
             rebuildFindContract();
-            nav = PlayerNav.to(player, () -> findContract, WALK_SPEED, this::reached);
-            nav.setHighlights(() -> java.util.List.copyOf(candidates));
+            createNavigation();
             return null;
         }
         if (findScan == null && findScanDrained) {
