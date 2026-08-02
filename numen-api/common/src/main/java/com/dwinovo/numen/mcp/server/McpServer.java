@@ -102,6 +102,12 @@ public final class McpServer {
         if (http != null) http.stop(0);
     }
 
+    /** Bound TCP port, primarily useful when tests request an ephemeral port ({@code 0}). */
+    int port() {
+        if (http == null) throw new IllegalStateException("server is not running");
+        return http.getAddress().getPort();
+    }
+
     // ---- HTTP layer ----
 
     private void handle(HttpExchange ex) throws IOException {
