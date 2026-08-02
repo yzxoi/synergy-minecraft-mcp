@@ -99,6 +99,14 @@ public abstract class AbstractCompanionTask<R extends TaskRecord>
 
     @Override
     public final void start() {
+        com.dwinovo.numen.core.Constants.LOG.info(
+                "[numen-task] start task={} tool={} body={} identity={} dimension={} "
+                        + "pos={},{},{} gameTime={}",
+                r.publicId(), r.getToolName(), player.getUUID(),
+                System.identityHashCode(player),
+                player.level().dimension().identifier(),
+                String.format("%.3f", player.getX()), String.format("%.3f", player.getY()),
+                String.format("%.3f", player.getZ()), player.level().getGameTime());
         for (Precondition p : preconditions()) {
             Precondition.Failure f = p.check();
             if (f != null) {
