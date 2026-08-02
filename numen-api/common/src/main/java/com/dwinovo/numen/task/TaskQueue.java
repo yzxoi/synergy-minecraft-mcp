@@ -1,0 +1,142 @@
+package com.dwinovo.numen.task;
+import com.dwinovo.numen.task.TaskResult;
+
+import java.util.ArrayDeque;
+import java.util.ArrayList;
+import java.util.Deque;
+import java.util.List;
+
+/**
+ * Per-entity FIFO queue of {@link TaskRecord}s, plus an outbox of completed
+ * records awaiting agent-loop pickup. Serial by design —
+ * {@code CompanionTickDispatcher} drives one record at a time (head-first), so
+ * there is at most one running task per body.
+ *
+ * <h2>Threading model</h2>
+ * Every operation is called from the server main thread:
+ * <ul>
+ *   <li>{@link #enqueue} runs from {@code ExecuteToolPayload.handle} —
+ *       the C→S packet handler is delivered on the server main thread by the
+ *       network layer (see {@code ExecuteToolPayload.handle}'s javadoc).</li>
+ *   <li>{@link #pollHead}, {@link #complete}, {@link #cancelAll} run from
+ *       {@code CompanionTickDispatcher} as it picks up, finishes, and cancels
+ *       the head task each tick.</li>
+ *   <li>{@link #drainCompleted} runs from the companion tick dispatcher
+ *       once per tick, shipping completed records back to the owning player as
+ *       {@code TaskResultPayload} for the client-side agent loop to consume.</li>
+ * </ul>
+ * Plain non-thread-safe collections are deliberate — adding {@code synchronized}
+ * or {@code ConcurrentLinkedDeque} would only mask a missed thread hop.
+ */
+@com.dwinovo.numen.api.Internal
+public final class TaskQueue {
+
+    private static final int RECENT_LIMIT = 32;
+
+    private final Deque<TaskRecord> pending = new ArrayDeque<>();
+    private final Deque<TaskRecord> completed = new ArrayDeque<>();
+    /** Bounded terminal history so an external task_id never collapses to ambiguous "idle". */
+    private final Deque<TaskRecord> recent = new ArrayDeque<>();
+
+    public void enqueue(TaskRecord record) {
+        pending.addLast(record);
+    }
+
+    /** Remove and return the first pending record (FIFO). Called from {@code CompanionTickDispatcher}. */
+    public TaskRecord pollHead() {
+        var it = pending.iterator();
+        while (it.hasNext()) {
+            TaskRecord r = it.next();
+            if (r.getState() == TaskState.PENDING) {
+                it.remove();
+                return r;
+            }
+        }
+        return null;
+    }
+
+    /** Move a record from in-flight to the outbox. Called from {@code CompanionTickDispatcher}. */
+    public void complete(TaskRecord record) {
+        completed.addLast(record);
+        remember(record);
+    }
+
+    /**
+     * Move all completed records out of the outbox. Called by the agent loop
+     * each tick to feed tool results back to the LLM.
+     */
+    public List<TaskRecord> drainCompleted() {
+        if (completed.isEmpty()) return List.of();
+        List<TaskRecord> out = new ArrayList<>(completed);
+        completed.clear();
+        return out;
+    }
+
+    public boolean hasPending() {
+        return !pending.isEmpty();
+    }
+
+    /**
+     * Push every pending record's deadline one tick later — called for each tick
+     * the LLM lane is preempted by a survival chain, so a queued-but-unstarted
+     * task doesn't burn its whole budget (stamped at enqueue time) while the body
+     * is busy staying alive.
+     */
+    public void freezePendingDeadlines() {
+        for (TaskRecord r : pending) {
+            r.extendDeadlineTo(r.getDeadlineGameTime() + 1);
+        }
+    }
+
+    public int pendingCount() {
+        return pending.size();
+    }
+
+    /** 第一个还未开跑的异步记录(受理即拒的策略下系统里至多一个),没有则 null。 */
+    public TaskRecord peekAsync() {
+        for (TaskRecord r : pending) {
+            if (r.isAsync()) return r;
+        }
+        return null;
+    }
+
+    /** Find a queued record by public id. */
+    public TaskRecord findPending(String taskId) {
+        if (taskId == null || taskId.isBlank()) return null;
+        for (TaskRecord r : pending) {
+            if (taskId.equals(r.publicId())) return r;
+        }
+        return null;
+    }
+
+    /** Find a recently completed record by public id, newest first. */
+    public TaskRecord findRecent(String taskId) {
+        if (taskId == null || taskId.isBlank()) return null;
+        var it = recent.descendingIterator();
+        while (it.hasNext()) {
+            TaskRecord r = it.next();
+            if (taskId.equals(r.publicId())) return r;
+        }
+        return null;
+    }
+
+    private void remember(TaskRecord record) {
+        recent.addLast(record);
+        while (recent.size() > RECENT_LIMIT) recent.removeFirst();
+    }
+
+    /**
+     * Cancel every pending record (mark TaskState.CANCELLED, move to outbox).
+     * Called on entity removal / death so the agent loop can flush results
+     * back to the LLM rather than leaving tool_calls unanswered.
+     */
+    public void cancelAll(String reason) {
+        for (TaskRecord r : pending) {
+            r.setState(TaskState.CANCELLED);
+            r.setResult(TaskResult.cancelled(reason));
+            completed.addLast(r);
+            remember(r);
+        }
+        pending.clear();
+    }
+}
