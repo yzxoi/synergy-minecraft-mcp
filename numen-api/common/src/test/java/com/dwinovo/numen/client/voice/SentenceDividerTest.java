@@ -70,8 +70,8 @@ class SentenceDividerTest {
                 "我先把工作台放在这里,大家都能用。然后我去挖矿,顺便找找铁,晚点回来。");
         assertEquals(List.of(
                 "我先把工作台放在这里,",              // 首段:逗号级
-                "大家都能用。",                        // 后续:句号级
-                "然后我去挖矿,顺便找找铁,晚点回来。"    // 中间逗号不再切
+                // 后续短句不足 MIN_SENTENCE_CHARS,与下一句合并;中间逗号不再切。
+                "大家都能用。然后我去挖矿,顺便找找铁,晚点回来。"
         ), out);
     }
 
@@ -86,7 +86,10 @@ class SentenceDividerTest {
     @Test
     void exclamationAndQuestionMarksEndSegments() {
         List<String> out = divide("小心身后有苦力怕快跑!要我把它引开吗?好我上了。");
-        assertEquals(List.of("小心身后有苦力怕快跑!", "要我把它引开吗?", "好我上了。"), out);
+        assertEquals(List.of(
+                "小心身后有苦力怕快跑!",
+                "要我把它引开吗?好我上了。"   // 后续短句合并,避免额外 TTS 请求
+        ), out);
     }
 
     // ---- 无标点保险 ----
