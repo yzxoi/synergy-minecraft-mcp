@@ -259,10 +259,23 @@ public final class PlayerNav {
     /** ARRIVED-IN-PLACE 已打点(边沿去重)。 */
     private boolean arrivedInPlaceLogged;
 
+    /**
+     * Stop locomotion before exposing ARRIVED to the task layer.  Navigation
+     * commits movement input once per server tick; if the terminal result is
+     * observed after that commit, leaving the old input latched lets a fake
+     * player coast several blocks past the requested destination before the
+     * scheduler's cleanup phase runs.
+     */
+    private Status arrived() {
+        InputDriver.halt(player);
+        player.setShiftKeyDown(false);
+        return Status.ARRIVED;
+    }
+
     public Status tick() {
         NavProfiler.tickFrame();
         if (reached.getAsBoolean()) {
-            return Status.ARRIVED;
+            return arrived();
         }
         if (failedTerminal) {
             return Status.FAILED;
@@ -297,11 +310,11 @@ public final class PlayerNav {
 
         if (searchSatisfied) {
             if (!revalidateGoalEachTick) {
-                return Status.ARRIVED;
+                return arrived();
             }
             BlockPos feet = PathExecutor.playerFeet(player);
             if (compiled.engineGoal().isInGoal(feet.getX(), feet.getY(), feet.getZ())) {
-                return Status.ARRIVED;
+                return arrived();
             }
             searchSatisfied = false;
         }
@@ -353,7 +366,7 @@ public final class PlayerNav {
                                     + "即满足,钉稳结论交任务层裁决",
                             feet.toShortString(), plannedCenter.toShortString());
                 }
-                return Status.ARRIVED;
+                return arrived();
             }
         }
         return Status.RUNNING;
