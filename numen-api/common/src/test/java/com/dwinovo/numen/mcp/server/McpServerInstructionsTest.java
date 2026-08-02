@@ -34,12 +34,29 @@ class McpServerInstructionsTest {
     void externalAsyncDescriptionsDefineTheMcpPollingContract() {
         for (String name : List.of("goto", "mine", "build", "blueprint", "collect_items",
                 "fish", "melee_attack", "ranged_attack")) {
-            String description = McpServer.descriptionForMcp(new FakeTool(name, "engine details"));
+            String description = McpServer.descriptionForMcp(new FakeTool(name,
+                    "wait for task_finished; status=done; do not poll; while <current_task> exists"));
             assertTrue(description.startsWith("MCP external driver:"), name);
             assertTrue(description.contains("task_status"), name);
             assertTrue(description.contains("data.terminal=true"), name);
             assertTrue(description.contains("do not receive task_finished"), name);
+            String engineDetails = description.substring(description.indexOf("Engine details"));
+            assertTrue(engineDetails.contains("built-in brain completion event"), name);
+            assertTrue(engineDetails.contains("built-in brain done status"), name);
+            assertTrue(engineDetails.contains("built-in brain no-poll rule"), name);
+            assertTrue(engineDetails.contains("built-in brain current-task marker"), name);
+            assertFalse(engineDetails.contains("task_finished"), name);
+            assertFalse(engineDetails.contains("status=done"), name);
+            assertFalse(engineDetails.contains("do not poll"), name);
+            assertFalse(engineDetails.contains("<current_task>"), name);
         }
+    }
+
+    @Test
+    void nonAsyncDescriptionsRemainByteForByteUnchanged() {
+        String original = "task_finished status=done do not poll <current_task>";
+        assertTrue(McpServer.descriptionForMcp(new FakeTool("task_status", original))
+                .equals(original));
     }
 
     @Test
