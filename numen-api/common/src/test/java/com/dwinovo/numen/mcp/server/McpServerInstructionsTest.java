@@ -3,6 +3,8 @@ package com.dwinovo.numen.mcp.server;
 import org.junit.jupiter.api.Test;
 
 import java.lang.reflect.Field;
+import java.util.List;
+import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -26,5 +28,32 @@ class McpServerInstructionsTest {
         assertFalse(instructions.contains("auto_mine"));
         assertFalse(instructions.contains("place_block"));
         assertFalse(instructions.contains("hunt"));
+    }
+
+    @Test
+    void externalAsyncDescriptionsDefineTheMcpPollingContract() {
+        for (String name : List.of("goto", "mine", "build", "blueprint", "collect_items",
+                "fish", "melee_attack", "ranged_attack")) {
+            String description = McpServer.descriptionForMcp(new FakeTool(name, "engine details"));
+            assertTrue(description.startsWith("MCP external driver:"), name);
+            assertTrue(description.contains("task_status"), name);
+            assertTrue(description.contains("data.terminal=true"), name);
+            assertTrue(description.contains("do not receive task_finished"), name);
+        }
+    }
+
+    @Test
+    void accessPromptUsesLiveToolNames() throws Exception {
+        String prompt = McpAccessPrompt.build("http://127.0.0.1:8765/mcp", "token");
+        assertTrue(prompt.contains("`goto`, `mine`"));
+        assertFalse(prompt.contains("move_to"));
+        assertFalse(prompt.contains("auto_mine"));
+    }
+
+    private record FakeTool(String name, String description) implements com.dwinovo.numen.agent.tool.NumenTool {
+        @Override public Map<String, Object> parameterSchema() { return Map.of("type", "object"); }
+        @Override public void onServerCall(String id, com.google.gson.JsonObject args,
+                                           com.dwinovo.numen.entity.NumenPlayer companion,
+                                           java.util.function.Consumer<String> reply) {}
     }
 }

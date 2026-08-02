@@ -19,8 +19,9 @@ import java.net.InetSocketAddress;
 import java.net.URI;
 import java.net.URLDecoder;
 import java.nio.charset.StandardCharsets;
-import java.util.List;
 import java.util.Locale;
+import java.util.Set;
+import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -60,6 +61,24 @@ public final class McpServer {
     private static final int SUMMARY_LIMIT = 90;
     /** Hard transport boundary: JSON-RPC messages larger than 1 MiB are rejected. */
     static final int MAX_REQUEST_BODY_BYTES = 1024 * 1024;
+
+    /** Long-running tools whose MCP caller receives a task receipt, not an event push. */
+    private static final Set<String> EXTERNAL_ASYNC_TOOLS = Set.of(
+            "goto", "mine", "build", "blueprint", "collect_items", "fish",
+            "melee_attack", "ranged_attack");
+
+    /**
+     * MCP is a request/response transport: external callers do not receive the
+     * built-in brain's {@code task_finished} event. Keep that distinction next
+     * to the tool-list projection so a stale engine description cannot make a
+     * remote caller wait forever for an event it can never observe.
+     */
+    private static final String EXTERNAL_ASYNC_GUIDANCE =
+            "MCP external driver: this action returns a task_id immediately. "
+                    + "Save it and call task_status with that task_id until data.terminal=true; "
+                    + "then inspect data.state and data.result and use perception to verify the world. "
+                    + "MCP callers do not receive task_finished events (that event is for the built-in brain only). "
+                    + "Do not resend the same action while its task is non-terminal; use task_stop to cancel it.";
 
     /**
      * Sent to the connecting agent in the {@code initialize} handshake (MCP's
@@ -448,12 +467,19 @@ public final class McpServer {
 
         for (NumenTool tool : ToolRegistry.all()) {
             if (config.isHidden(tool.name())) continue;
-            tools.add(toolDef(tool.name(), tool.description(), withCompanion(tool.parameterSchema())));
+            tools.add(toolDef(tool.name(), descriptionForMcp(tool), withCompanion(tool.parameterSchema())));
         }
 
         JsonObject result = new JsonObject();
         result.add("tools", tools);
         return result;
+    }
+
+    /** Project an engine description into the semantics visible to an MCP caller. */
+    static String descriptionForMcp(NumenTool tool) {
+        String description = tool.description();
+        if (!EXTERNAL_ASYNC_TOOLS.contains(tool.name())) return description;
+        return EXTERNAL_ASYNC_GUIDANCE + "\n\nEngine details:\n" + description;
     }
 
     private JsonObject toolDef(String name, String description, JsonObject inputSchema) {
