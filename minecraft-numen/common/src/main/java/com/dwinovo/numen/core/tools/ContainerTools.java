@@ -11,10 +11,10 @@ import net.minecraft.world.item.ItemStack;
 import java.util.List;
 
 /**
- * Container-GUI tools authored on the {@link NumenAction} surface. {@code transfer}
+ * Container-GUI tools from the former {@code @NumenAction} authoring surface. {@code transfer}
  * is the first object-array dogfood: its {@code moves} argument binds to a
  * {@code List<Move>}, the adapter deriving the array's item object schema from
- * the {@link Move} record's {@link Arg} components. Behaviour matches the
+ * the {@link Move} record's former {@code @Arg} components. Behaviour matches the
  * hand-written tool.
  */
 public final class ContainerTools {

@@ -5,7 +5,7 @@ import com.dwinovo.numen.task.TaskRecord;
 import com.dwinovo.numen.core.task.MoveToTaskRecord;
 
 /**
- * Movement tools authored on the {@link NumenAction} surface. {@code goto}
+ * Movement tools from the former {@code @NumenAction} authoring surface. {@code goto}
  * is the first world-action dogfood: it returns a {@link TaskRecord}, so the
  * adapter ships it to the body and the task queue runs it — the method's only
  * job is to validate args and build the record (the {@link ToolContext} carries

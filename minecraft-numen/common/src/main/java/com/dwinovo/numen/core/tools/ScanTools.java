@@ -18,7 +18,7 @@ import java.util.Set;
 import java.util.function.Consumer;
 
 /**
- * The {@code scan_blocks} perception tool authored on the {@link NumenAction}
+ * The {@code scan_blocks} perception tool from the former {@code @NumenAction}
  * surface. It is an async (budget-sliced) server job: the adapter infers ASYNC
  * because the method takes the live entity plus a reply {@link Consumer} and
  * returns void — the result arrives on a later tick through the callback.

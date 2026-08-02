@@ -20,7 +20,7 @@ import net.minecraft.world.level.levelgen.structure.Structure;
 import net.minecraft.world.phys.Vec3;
 
 /**
- * Perception tools authored on the {@link NumenAction} surface — the first
+ * Perception tools from the former {@code @NumenAction} authoring surface — the first
  * built-ins to dogfood the annotation/reflection path. Behaviour is identical
  * to the hand-written {@code NumenTool} classes they replace; only the wiring
  * (auto-derived schema, reflective invoke, entity injected by type) changed.

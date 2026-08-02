@@ -13,7 +13,7 @@ import java.util.concurrent.CompletableFuture;
 /**
  * 借正版玩家皮肤——零第三方、零自写 HTTP,全部走服务端内置的 Mojang 服务栈:
  * <ol>
- *   <li>名字 → UUID:{@link MinecraftServer#getProfileCache()}(usercache.json
+ *   <li>名字 → UUID:{@link MinecraftServer#services()} 中的名字缓存(usercache.json
  *       两级缓存,未命中才查 Mojang,离线服照常工作);</li>
  *   <li>UUID → 完整档案:{@code SessionService.fetchProfile(uuid, true)},返回的
  *       GameProfile 自带 Mojang 签名的 textures 属性(头颅方块渲染玩家头的同一套)。</li>

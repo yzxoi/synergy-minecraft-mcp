@@ -9,7 +9,7 @@ import com.dwinovo.numen.task.TaskChain;
  * {@link Float#NEGATIVE_INFINITY} when it is off — so with the default-off gate the
  * four survival chains never beat {@link TaskChain#LLM_BASE_PRIORITY} and the
  * scheduler behaves exactly as it did before the layer existed (only
- * {@link LlmTaskChain} ever wins). A later stage flips this on; nothing here does.
+ * {@link com.dwinovo.numen.task.LlmTaskChain} ever wins). A later stage flips this on; nothing here does.
  *
  * <p>Deliberately a plain static flag, not a per-companion setting: the layer is
  * enabled globally for the whole build once it graduates. {@code volatile} because

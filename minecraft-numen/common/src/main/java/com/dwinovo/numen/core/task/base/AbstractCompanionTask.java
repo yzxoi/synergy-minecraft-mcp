@@ -50,7 +50,7 @@ import java.util.Map;
  *
  * <h2>The onTick fail idiom</h2>
  * A concrete {@link #onTick()} reports a failure with
- * {@snippet : fail(reason, FailureType.SOMETHING); return TaskState.FAILED; }
+ * <pre>{@code fail(reason, FailureType.SOMETHING); return TaskState.FAILED;}</pre>
  * — {@link #fail} records the reason + type (so {@link #buildResult} and any
  * parent ladder can read them) and {@code return FAILED} ends the tick. The two
  * are kept separate (rather than {@code fail} returning {@code FAILED}) so a
