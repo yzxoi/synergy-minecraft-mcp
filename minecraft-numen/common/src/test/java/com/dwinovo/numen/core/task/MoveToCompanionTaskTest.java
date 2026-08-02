@@ -19,4 +19,11 @@ class MoveToCompanionTaskTest {
         assertTrue(MoveToCompanionTask.acceptsArrival(true, true));
         assertFalse(MoveToCompanionTask.acceptsArrival(false, true));
     }
+
+    @Test
+    void yLevelArrivalIsStrict() {
+        assertTrue(MoveToCompanionTask.atYLevel(64, 64));
+        assertFalse(MoveToCompanionTask.atYLevel(63, 64),
+                "one-block tolerance can claim an elevation that was not reached");
+    }
 }

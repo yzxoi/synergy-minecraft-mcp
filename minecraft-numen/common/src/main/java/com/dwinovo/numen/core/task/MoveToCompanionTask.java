@@ -46,6 +46,9 @@ public final class MoveToCompanionTask extends AbstractCompanionTask<MoveToTaskR
      *  slow legitimate move (a long bare-hand dig holds the executor's progress clock
      *  at 0 anyway; this covers place maneuvers and replan gaps). */
     private static final int PROGRESS_GRACE_TICKS = 100;
+    /** A navigation may replan several times, but a replan is not physical progress. */
+    private static final int MAX_LEASE_NO_PROGRESS_TICKS = 200;
+    private static final double LEASE_MOVE_EPSILON = 0.02;
     /** Hard check-in cap: even a healthy marathon yields (with a resumable result) after
      *  this long, bounding how long the LLM goes without control. Renewals never push
      *  the deadline past start + this. */
@@ -72,6 +75,11 @@ public final class MoveToCompanionTask extends AbstractCompanionTask<MoveToTaskR
     private boolean nearRetried;
     /** Absolute ceiling for lease renewals (start + {@link #CHECK_IN_CAP_TICKS}); 0 = unset. */
     private long leaseCapGameTime;
+    private double leaseLastX;
+    private double leaseLastY;
+    private double leaseLastZ;
+    private double leaseLastDistance = Double.MAX_VALUE;
+    private int leaseNoProgressTicks;
 
     // ==================== FIND(就近方块)状态 ====================
     /** 候选上限、扫描同层判据/最远环半径、离线扫描的放弃时限、行程预算基准。 */
@@ -102,6 +110,10 @@ public final class MoveToCompanionTask extends AbstractCompanionTask<MoveToTaskR
     @Override
     protected void onStart() {
         r.setStallWarningTicks(PROGRESS_LEASE_TICKS);
+        leaseLastX = player.getX();
+        leaseLastY = player.getY();
+        leaseLastZ = player.getZ();
+        leaseLastDistance = repDistance();
         if (r.kind == MoveToTaskRecord.Kind.FIND) {
             reportActivity("scanning", "searching loaded chunks for " + r.block,
                     Map.of("target", r.block));
@@ -161,6 +173,10 @@ public final class MoveToCompanionTask extends AbstractCompanionTask<MoveToTaskR
     /** Task completion requires both the navigation marker and stable arrival. */
     static boolean acceptsArrival(boolean navArrived, boolean taskReached) {
         return navArrived && taskReached;
+    }
+
+    static boolean atYLevel(int actualFeetY, int targetY) {
+        return actualFeetY == targetY;
     }
 
     /** The navigation goal for this move's kind. */
@@ -256,15 +272,6 @@ public final class MoveToCompanionTask extends AbstractCompanionTask<MoveToTaskR
             fail(blockedMessage("no path"), FailureType.NO_PATH);
             return TaskState.FAILED;
         }
-        // Progress lease: while the nav is consuming its plan (steps advancing / digging),
-        // keep the deadline PROGRESS_LEASE ahead — never past the check-in cap. Plan
-        // consumption, NOT goal distance, is the liveness signal: healthy routes routinely
-        // move away from the goal (skirting a lake, spiraling down), and the flat budget
-        // above can't price terrain (a dig-heavy route once died 1 block short).
-        if (nav.stallTicks() <= PROGRESS_GRACE_TICKS && leaseCapGameTime > 0) {
-            long now = player.level().getGameTime();
-            r.extendDeadlineTo(Math.min(now + PROGRESS_LEASE_TICKS, leaseCapGameTime));
-        }
         // Track passive progress toward the goal: the planner stops at the water surface
         // above an underwater target, but the body keeps drifting toward it on its own (it
         // sinks). Reset the settle timer whenever we get closer.
@@ -275,6 +282,35 @@ public final class MoveToCompanionTask extends AbstractCompanionTask<MoveToTaskR
             settleTicks = 0;
         } else {
             settleTicks++;
+        }
+        // A fresh path segment/replan resets nav.stallTicks(), so using that
+        // counter alone lets a boxed body renew its task lease forever.  Lease
+        // renewal is therefore tied to observed physical movement (or genuine
+        // improvement in the task's distance metric), sampled across all plans.
+        boolean physicallyProgressed = Math.sqrt(
+                Math.pow(player.getX() - leaseLastX, 2)
+                        + Math.pow(player.getY() - leaseLastY, 2)
+                        + Math.pow(player.getZ() - leaseLastZ, 2)) >= LEASE_MOVE_EPSILON;
+        boolean goalProgressed = d < leaseLastDistance - 0.1;
+        if (physicallyProgressed || goalProgressed) {
+            leaseLastX = player.getX();
+            leaseLastY = player.getY();
+            leaseLastZ = player.getZ();
+            leaseLastDistance = Math.min(leaseLastDistance, d);
+            leaseNoProgressTicks = 0;
+        } else {
+            leaseNoProgressTicks++;
+        }
+        if (leaseNoProgressTicks > MAX_LEASE_NO_PROGRESS_TICKS) {
+            fail("navigation made no physical progress for " + MAX_LEASE_NO_PROGRESS_TICKS
+                    + " ticks despite replanning; retry from a nearer waypoint",
+                    FailureType.BOXED_IN);
+            return TaskState.FAILED;
+        }
+        if ((physicallyProgressed || goalProgressed)
+                && nav.stallTicks() <= PROGRESS_GRACE_TICKS && leaseCapGameTime > 0) {
+            long now = player.level().getGameTime();
+            r.extendDeadlineTo(Math.min(now + PROGRESS_LEASE_TICKS, leaseCapGameTime));
         }
         Map<String, Object> live = new HashMap<>();
         live.put("remaining_blocks", d);
@@ -400,7 +436,7 @@ public final class MoveToCompanionTask extends AbstractCompanionTask<MoveToTaskR
                 yield blockGoal().isAt(feet());
             }
             case COLUMN -> horizontalDistSqr(bx, bz) <= NEAR_SUCCESS_RADIUS * NEAR_SUCCESS_RADIUS;
-            case YLEVEL -> Math.abs(feet().getY() - by) <= 1;
+            case YLEVEL -> atYLevel(feet().getY(), by);
             // FIND 候选众多,失败梯已在候选间轮换过,不设贴近成功档
             case FIND -> false;
         };
@@ -560,8 +596,18 @@ public final class MoveToCompanionTask extends AbstractCompanionTask<MoveToTaskR
                         + (dy > 0 ? "up — likely mid-air" : "down — likely blocked")
                         + "); for a location, omit y and I resolve the surface.";
             }
-            case COLUMN -> "arrived at location x=" + bx + " z=" + bz
-                    + ", standing on the ground at y=" + gy + ".";
+            case COLUMN -> {
+                if (nearRetried) {
+                    double distance = Math.sqrt(horizontalDistSqr(bx, bz));
+                    yield "reached near location x=" + bx + " z=" + bz
+                            + "; final position=" + String.format("%.2f,%.2f,%.2f",
+                                    player.getX(), player.getY(), player.getZ())
+                            + ", horizontal distance=" + String.format("%.2f", distance)
+                            + " blocks (not exact).";
+                }
+                yield "arrived at location x=" + bx + " z=" + bz
+                        + ", standing on the ground at y=" + gy + ".";
+            }
             case YLEVEL -> "reached elevation y=" + gy
                     + (gy == by ? "." : " (requested y=" + by + ").");
             case FIND -> {
