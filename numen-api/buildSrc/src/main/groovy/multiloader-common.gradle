@@ -143,8 +143,11 @@ publishing {
     repositories {
         maven {
             name = 'localNumen'
-            // Local file repo by default; override with -Plocal_maven_url=... if needed.
-            url = uri(findProperty('local_maven_url') ?: 'file:///D:/01_Projects/numen-maven')
+            // In this monorepo, both sibling projects share ../.maven-local.
+            // Standalone builds can still override it with -Plocal_maven_url=....
+            url = findProperty('local_maven_url')
+                    ? uri(findProperty('local_maven_url'))
+                    : rootProject.file('../.maven-local').toURI()
         }
     }
 }

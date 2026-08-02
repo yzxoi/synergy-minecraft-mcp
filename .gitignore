@@ -10,3 +10,4 @@
 **/config/numen/models.json
 **/config/numen/mcp_server.json
 **/config/numen/mcp_clients.json
+.maven-local/

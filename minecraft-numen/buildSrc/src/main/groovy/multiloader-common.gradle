@@ -39,7 +39,9 @@ repositories {
     // fresh clones / other people resolve it too.
     maven {
         name = 'localNumen'
-        url = uri(findProperty('local_maven_url') ?: 'file:///D:/01_Projects/numen-maven')
+        url = findProperty('local_maven_url')
+                ? uri(findProperty('local_maven_url'))
+                : rootProject.file('../.maven-local').toURI()
     }
     maven {
         name = 'numenRemote'
