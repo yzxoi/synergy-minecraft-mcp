@@ -286,7 +286,21 @@ public final class McpServer {
     static String descriptionForMcp(NumenTool tool) {
         String description = tool.description();
         if (!EXTERNAL_ASYNC_TOOLS.contains(tool.name())) return description;
-        return EXTERNAL_ASYNC_GUIDANCE + "\n\nEngine details:\n" + description;
+        return EXTERNAL_ASYNC_GUIDANCE + "\n\nEngine details (built-in brain wording; not the MCP contract):\n"
+                + sanitizeEngineDescription(description);
+    }
+
+    /**
+     * Keep internal-agent lifecycle vocabulary from looking like MCP protocol
+     * fields. This only runs while projecting tools/list; the engine's original
+     * description remains unchanged for the built-in brain.
+     */
+    private static String sanitizeEngineDescription(String description) {
+        return description
+                .replace("task_finished", "the built-in brain completion event")
+                .replace("status=done", "the built-in brain done status")
+                .replace("do not poll", "the built-in brain no-poll rule")
+                .replace("<current_task>", "the built-in brain current-task marker");
     }
 
     private JsonObject toolDef(String name, String description, JsonObject inputSchema) {
