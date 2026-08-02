@@ -469,6 +469,16 @@ public final class PlayerNav {
     }
 
     /**
+     * True only while a live path executor is breaking a block. This is a
+     * physical-progress signal for task leases; a replan with no executor is
+     * intentionally not treated as progress.
+     */
+    public boolean isDigging() {
+        PathExecutor current = core.getCurrent();
+        return current != null && current.isDigging();
+    }
+
+    /**
      * 规划器在飞且当前无路段在执行——身体站着等异步搜索返回。任务层用它
      * 冻结任务 deadline:deadline 度量的是身体干活的刻,搜索的墙钟延迟不该
      * 折算成任务超时(tick 越快于真实时间,这笔折算越离谱,无上限 tick 的
@@ -515,5 +525,4 @@ public final class PlayerNav {
         player.setShiftKeyDown(false);
     }
 }
-
 

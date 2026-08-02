@@ -292,7 +292,12 @@ public final class MoveToCompanionTask extends AbstractCompanionTask<MoveToTaskR
                         + Math.pow(player.getY() - leaseLastY, 2)
                         + Math.pow(player.getZ() - leaseLastZ, 2)) >= LEASE_MOVE_EPSILON;
         boolean goalProgressed = d < leaseLastDistance - 0.1;
-        if (physicallyProgressed || goalProgressed) {
+        // A legitimate hard-block dig can hold the feet in one cell for many
+        // seconds. PathExecutor exposes that active operation separately so a
+        // replan cannot masquerade as progress, while an actual dig still
+        // renews the lease and avoids a false BOXED_IN verdict.
+        boolean activelyDigging = nav.isDigging();
+        if (physicallyProgressed || goalProgressed || activelyDigging) {
             leaseLastX = player.getX();
             leaseLastY = player.getY();
             leaseLastZ = player.getZ();
@@ -307,7 +312,7 @@ public final class MoveToCompanionTask extends AbstractCompanionTask<MoveToTaskR
                     FailureType.BOXED_IN);
             return TaskState.FAILED;
         }
-        if ((physicallyProgressed || goalProgressed)
+        if ((physicallyProgressed || goalProgressed || activelyDigging)
                 && nav.stallTicks() <= PROGRESS_GRACE_TICKS && leaseCapGameTime > 0) {
             long now = player.level().getGameTime();
             r.extendDeadlineTo(Math.min(now + PROGRESS_LEASE_TICKS, leaseCapGameTime));
@@ -316,6 +321,7 @@ public final class MoveToCompanionTask extends AbstractCompanionTask<MoveToTaskR
         live.put("remaining_blocks", d);
         live.put("best_remaining_blocks", bestDist);
         live.put("nav_stall_ticks", nav.stallTicks());
+        live.put("digging", activelyDigging);
         live.put("x", player.getX());
         live.put("y", player.getY());
         live.put("z", player.getZ());
