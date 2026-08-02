@@ -25,7 +25,7 @@ Say *"go grab me a stack of iron,"* and it really heads underground, paths throu
 ```
 You:    go grab me a stack of iron
 Numen:  On it. Heading underground to find iron.
-        ▸ 4 steps · locate_biome · move_to · auto_mine · collect_items   ✔
+        ▸ 4 steps · locate_biome · goto · mine · collect_items   ✔
 Numen:  Got 64 raw iron — want me to smelt it?
 ```
 
@@ -73,11 +73,11 @@ Every mod you can name, the AI can play. It's a big promise — but every brick 
 ## Quick start
 
 1. **Install** the mod (plus [Fabric API](https://modrinth.com/mod/fabric-api) if you're on Fabric) and launch once.
-2. **Add your API key.** Press **`G`** → **Settings**, pick a provider, and paste your own key (OpenAI, DeepSeek, Kimi, Qwen, Doubao… any OpenAI-compatible backend works).
+2. **Create a model configuration.** Press **`N`** → **Settings → Model Configs**, then add a provider, model, and your own API key.
 3. **Summon a companion.** Click the **`+`** in the panel's left rail, give it a name, hit Enter.
 4. **Click its avatar to chat**, and tell it what to do. The rest is on it.
 
-> The panel (press `G`) has three tabs: **Chat** (conversation + a live plan board), **Items** (a read-only character sheet styled like the vanilla inventory), and **Settings** (key and model). The left rail *is* your companion roster — click an avatar to switch, **`+`** to summon, **`✕`** to dismiss; you barely need commands at all. A small avatar HUD hugs the left screen edge, too — when a companion speaks, its avatar and a speech bubble slide out together.
+> The panel (press `N`) has three tabs: **Chat** (conversation + a live plan board), **Items** (a read-only character sheet styled like the vanilla inventory), and **Settings** (key and model). The left rail *is* your companion roster — click an avatar to switch, **`+`** to summon, **`✕`** to dismiss; you barely need commands at all. A small avatar HUD hugs the left screen edge, too — when a companion speaks, its avatar and a speech bubble slide out together.
 
 ## What it can do
 
@@ -89,7 +89,7 @@ Give it an intent and it breaks it into dozens of actions and runs them end to e
 - 🔭 **Real perception** — scan blocks, scan entities, check status, look up recipes, locate any structure or biome, even x-ray what's inside a machine without opening its GUI.
 - 🧠 **Real memory** — conversations persist across saves and auto-compact when they grow long; it remembers the crafting tables, furnaces, and chests it has used, and walks back to them instead of building new ones. Death is recoverable: vanilla death drops as usual, then it respawns by your side after a moment.
 
-Nearly thirty tools like these make up its hands and eyes *right now*. And its abilities keep growing — through the very two instruments of Reach:
+Thirty-four native tools make up its hands and eyes *right now*. And its abilities keep growing — through the very two instruments of Reach:
 
 - 📖 **Write a Skill to coach it.** Markdown workflows under `config/numen/skills/`, loaded only when relevant to keep the prompt lean. It ships with a full set of guides for the whole vanilla end-game (the Nether, blaze rods, ender pearls, the stronghold, the dragon fight…). Edit one, or write your own, to teach it your base's rules — or a whole new mod's playbook.
 - 🔌 **Plug in an MCP to extend it.** A compatibility module wires a mod's inner world, structured, into its senses and hands — so the boundary of what it *can do* grows together with the entire modded ecosystem.
