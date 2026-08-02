@@ -3,6 +3,7 @@ package com.dwinovo.numen.core;
 import com.dwinovo.numen.agent.skill.SkillRegistry;
 import com.dwinovo.numen.core.debug.DebugCommands;
 import com.dwinovo.numen.core.debug.PathDebugRenderer;
+import com.dwinovo.numen.core.gametest.NumenGameTests;
 import com.dwinovo.numen.core.pathing.cache.PathCaches;
 import com.dwinovo.numen.task.CompanionTickDispatcher;
 import com.dwinovo.numen.core.task.ScanBlocksJob;
@@ -30,6 +31,7 @@ public class NumenCoreNeoForge {
 
     public NumenCoreNeoForge(IEventBus eventBus, ModContainer container) {
         NumenCore.init();
+        NumenGameTests.register(eventBus);
 
         NeoForge.EVENT_BUS.addListener(NumenCoreNeoForge::onServerTickPost);
         // Release pathfinding chunk-ref snapshots when the server stops (don't pin an old world).
