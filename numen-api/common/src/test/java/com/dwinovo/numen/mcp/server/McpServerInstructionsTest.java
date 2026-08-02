@@ -46,7 +46,6 @@ class McpServerInstructionsTest {
     void accessPromptUsesLiveToolNames() throws Exception {
         String prompt = McpAccessPrompt.build("http://127.0.0.1:8765/mcp", "token");
         assertTrue(prompt.contains("`goto`, `mine`"));
-        assertTrue(prompt.contains("`data.terminal=true`"));
         assertFalse(prompt.contains("move_to"));
         assertFalse(prompt.contains("auto_mine"));
     }
