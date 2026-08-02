@@ -19,10 +19,10 @@ dependencies {
     // 单元测试要真的跑到引擎类(排程机器随 api),运行时类路径补上同一坐标。
     testImplementation "com.dwinovo.numen:numen-api-common-1.21.11:0.0.8-SNAPSHOT"
 
-    compileOnly group: 'org.spongepowered', name: 'mixin', version: '0.8.5'
+    compileOnly 'org.spongepowered:mixin:0.8.5'
     // fabric and neoforge both bundle mixinextras, so it is safe to use it in common
-    compileOnly group: 'io.github.llamalad7', name: 'mixinextras-common', version: '0.5.3'
-    annotationProcessor group: 'io.github.llamalad7', name: 'mixinextras-common', version: '0.5.3'
+    compileOnly 'io.github.llamalad7:mixinextras-common:0.5.3'
+    annotationProcessor 'io.github.llamalad7:mixinextras-common:0.5.3'
 
     testImplementation platform('org.junit:junit-bom:5.11.4')
     testImplementation 'org.junit.jupiter:junit-jupiter'
