@@ -288,6 +288,14 @@ public final class PathingCore {
         BlockPos feetBefore = PathExecutor.playerFeet(player);
         safeToCancel = current.onTick();
         if (current.failed() || current.finished()) {
+            // The final movement tick may have populated the harness with a
+            // forward/strafe impulse before advancing the path cursor.  Clear
+            // it before the harness commit below; otherwise a terminal goto
+            // can coast past its reported final position until the next task
+            // tick (especially for fake ServerPlayers with no client packet to
+            // overwrite the input).
+            harness.clearAllKeys();
+            harness.stopBreaking();
             noteSegmentEnd(current, feetBefore);
             current = null;
             BlockPos feet = PathExecutor.playerFeet(player);

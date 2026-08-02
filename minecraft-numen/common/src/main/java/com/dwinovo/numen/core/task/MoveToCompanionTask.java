@@ -173,11 +173,17 @@ public final class MoveToCompanionTask extends AbstractCompanionTask<MoveToTaskR
         return blockCompiled().goal();
     }
 
-    /** The BLOCK kind's navigation contract: bare coordinates mean occupy
-     *  exactly that cell, digging out whatever is there (the block form is
-     *  the way to say "walk up beside it instead"). */
+    /** The BLOCK kind's navigation contract: walkable coordinates mean occupy
+     *  exactly that cell; an occupied cell is an interaction target and is
+     *  approached from beside it without consuming the block. */
     private com.dwinovo.numen.core.pathing.goal.GoalCompiler.Compiled blockCompiled() {
-        return com.dwinovo.numen.core.pathing.goal.GoalCompiler.standOn(blockTarget);
+        // Keep the task's arrival contract in lockstep with the intent: an
+        // enterable target cell means "stand on it", while an occupied cell
+        // means "walk up beside it" and is sacred to the route.  Calling
+        // standOn unconditionally made explicit x+y+z gotos ask the planner
+        // to enter a solid block, which can never succeed in survival.
+        return com.dwinovo.numen.core.pathing.goal.GoalCompiler.block(
+                player.level(), blockTarget);
     }
 
     /** Does a collision shape occupy the target cell (feet can't go there)? */
@@ -297,14 +303,16 @@ public final class MoveToCompanionTask extends AbstractCompanionTask<MoveToTaskR
                 }
                 // Otherwise: as close as the terrain allows → (teaching) success or fail.
                 if (closeEnoughToSucceed()) yield TaskState.SUCCESS;
-                // Recovery ladder — ONE retry rung, land nav only: re-plan accepting
-                // anywhere within NEAR_SUCCESS_RADIUS of the destination. Goal-consistent,
-                // not scope creep: a stop within that radius already counts as arrival
-                // (closeEnoughToSucceed above), the retry just lets the SEARCH aim for it.
-                // YLEVEL has no looser near-equivalent (its goal is already any-x/z), and
-                // the water-settle path above is untouched.
+                // Recovery ladder — ONE retry rung for COLUMN only: re-plan accepting
+                // anywhere within NEAR_SUCCESS_RADIUS of the requested location. An
+                // explicit BLOCK is an exact/interaction contract; silently widening
+                // its Y or entering a nearby column turns a failed exact request into
+                // a false success, so it must fail with its path diagnosis instead.
+                // YLEVEL has no looser near-equivalent, and the water-settle path above
+                // is untouched.
                 if (!nearRetried && !player.isInWater()
                         && r.kind != MoveToTaskRecord.Kind.YLEVEL
+                        && r.kind != MoveToTaskRecord.Kind.BLOCK
                         && r.kind != MoveToTaskRecord.Kind.FIND) {
                     nearRetried = true;
                     reportActivity("recovering", "retrying with the accepted near-goal tolerance",
@@ -312,9 +320,6 @@ public final class MoveToCompanionTask extends AbstractCompanionTask<MoveToTaskR
                     stopNav();
                     NavGoal retry = nearRetryGoal();
                     nav = PlayerNav.toGoal(player, () -> retry, WALK_SPEED, this::closeEnoughToSucceed);
-                    if (r.kind == MoveToTaskRecord.Kind.BLOCK) {
-                        nav.setHighlights(() -> java.util.List.of(blockTarget));
-                    }
                     yield TaskState.RUNNING;
                 }
                 String also = nearRetried
@@ -327,12 +332,9 @@ public final class MoveToCompanionTask extends AbstractCompanionTask<MoveToTaskR
         };
     }
 
-    /** The retry rung's loosened goal — the destination widened to the SAME radius that
-     *  already counts as arrival ({@link #NEAR_SUCCESS_RADIUS}), never wider. */
+    /** The COLUMN retry rung's loosened goal — the destination widened to the SAME
+     *  radius that already counts as arrival ({@link #NEAR_SUCCESS_RADIUS}), never wider. */
     private NavGoal nearRetryGoal() {
-        if (r.kind == MoveToTaskRecord.Kind.BLOCK) {
-            return NavGoal.near(blockTarget, NEAR_SUCCESS_RADIUS);
-        }
         // COLUMN: within the radius HORIZONTALLY at any height (NavGoal.near is 3D and
         // needs a Y this kind doesn't have; heuristic/center reuse the column's own).
         NavGoal column = NavGoal.column(bx, bz);
@@ -361,7 +363,15 @@ public final class MoveToCompanionTask extends AbstractCompanionTask<MoveToTaskR
             return false;
         }
         return switch (r.kind) {
-            case BLOCK, COLUMN -> horizontalDistSqr(bx, bz) <= NEAR_SUCCESS_RADIUS * NEAR_SUCCESS_RADIUS;
+            case BLOCK -> {
+                // An exact BLOCK target must never be reported successful merely
+                // because its X/Z column is nearby (the old fallback silently
+                // turned a wrong Y into a success).  A solid target uses the
+                // interact/get-to-block contract; an enterable target requires
+                // exact membership.
+                yield blockGoal().isAt(feet());
+            }
+            case COLUMN -> horizontalDistSqr(bx, bz) <= NEAR_SUCCESS_RADIUS * NEAR_SUCCESS_RADIUS;
             case YLEVEL -> Math.abs(feet().getY() - by) <= 1;
             // FIND 候选众多,失败梯已在候选间轮换过,不设贴近成功档
             case FIND -> false;
@@ -509,6 +519,11 @@ public final class MoveToCompanionTask extends AbstractCompanionTask<MoveToTaskR
             case BLOCK -> {
                 if (feet().equals(blockTarget)) {
                     yield "reached the exact cell " + bx + "," + by + "," + bz + ".";
+                }
+                if (targetCellSolid()) {
+                    yield "reached " + player.level().getBlockState(blockTarget).getBlock()
+                            .builtInRegistryHolder().key().identifier()
+                            + " at " + bx + "," + by + "," + bz + " (standing beside it).";
                 }
                 // Got to the column but not the exact y (the usual "guessed Y was in
                 // the air" case) — teach the model to drop Y for a location.

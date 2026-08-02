@@ -63,6 +63,15 @@ public final class InputDriver {
     public static void halt(ServerPlayer p) {
         p.zza = 0.0f;
         p.xxa = 0.0f;
+        // A server-side fake player has no client packet to replace the last
+        // movement input.  Vanilla travel leaves horizontal momentum in
+        // deltaMovement, so clearing only zza/xxa still lets the body coast
+        // several blocks after a task reaches its goal (the next status read
+        // then reports a position different from the terminal result).  Stop
+        // horizontal drift immediately while preserving vertical motion for
+        // gravity/fall handling.
+        net.minecraft.world.phys.Vec3 velocity = p.getDeltaMovement();
+        p.setDeltaMovement(0.0, velocity.y, 0.0);
         p.setSprinting(false);
     }
 
