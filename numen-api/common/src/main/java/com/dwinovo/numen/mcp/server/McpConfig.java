@@ -28,7 +28,10 @@ import java.util.List;
  *   <li>{@code call_timeout_seconds} — how long one {@code tools/call} waits for a
  *       body action to finish before reporting a timeout;</li>
  *   <li>{@code hidden_tools} — engine tools NOT exposed to the external agent
- *       (agent-internal bookkeeping the external brain has no business calling).</li>
+ *       (agent-internal bookkeeping the external brain has no business calling);</li>
+ *   <li>{@code allowed_origins} — additional exact browser origins allowed to
+ *       reach the endpoint. Missing {@code Origin} is accepted for native MCP
+ *       clients, and the endpoint's own origin is always accepted.</li>
  * </ul>
  */
 public record McpConfig(
@@ -37,14 +40,22 @@ public record McpConfig(
         int port,
         String token,
         int callTimeoutSeconds,
-        List<String> hiddenTools) {
+        List<String> hiddenTools,
+        List<String> allowedOrigins) {
 
     /** Tools the built-in brain manages for itself — never handed to an external driver. */
     private static final List<String> DEFAULT_HIDDEN = List.of("todowrite", "load_skill");
 
+    public McpConfig {
+        host = host == null || host.isBlank() ? "127.0.0.1" : host;
+        token = token == null ? "" : token;
+        hiddenTools = hiddenTools == null ? List.of() : List.copyOf(hiddenTools);
+        allowedOrigins = allowedOrigins == null ? List.of() : List.copyOf(allowedOrigins);
+    }
+
     public static McpConfig load(Path file) {
         if (!Files.isRegularFile(file)) {
-            McpConfig def = new McpConfig(false, "127.0.0.1", 8765, "", 300, DEFAULT_HIDDEN);
+            McpConfig def = new McpConfig(false, "127.0.0.1", 8765, "", 300, DEFAULT_HIDDEN, List.of());
             writeDefault(file, def);
             return def;
         }
@@ -57,11 +68,18 @@ public record McpConfig(
                     o.has("port") ? o.get("port").getAsInt() : 8765,
                     strOr(o, "token", ""),
                     o.has("call_timeout_seconds") ? o.get("call_timeout_seconds").getAsInt() : 300,
-                    o.has("hidden_tools") ? strings(o, "hidden_tools") : DEFAULT_HIDDEN);
+                    o.has("hidden_tools") ? strings(o, "hidden_tools") : DEFAULT_HIDDEN,
+                    o.has("allowed_origins") ? strings(o, "allowed_origins") : List.of());
         } catch (IOException | RuntimeException ex) {
             Constants.LOG.warn("[numen-mcp] unreadable config {} — server disabled: {}", file, ex.toString());
-            return new McpConfig(false, "127.0.0.1", 8765, "", 300, DEFAULT_HIDDEN);
+            return new McpConfig(false, "127.0.0.1", 8765, "", 300, DEFAULT_HIDDEN, List.of());
         }
+    }
+
+    /** Source-compatible constructor for callers that do not configure browser origins. */
+    public McpConfig(boolean enabled, String host, int port, String token, int callTimeoutSeconds,
+                     List<String> hiddenTools) {
+        this(enabled, host, port, token, callTimeoutSeconds, hiddenTools, List.of());
     }
 
     public boolean isHidden(String toolName) {
@@ -70,12 +88,12 @@ public record McpConfig(
 
     /** 配置文件还没读到时的占位(模式关闭),避免 {@link McpMode} 持 null 配置。 */
     static McpConfig disabledDefault() {
-        return new McpConfig(false, "127.0.0.1", 8765, "", 300, DEFAULT_HIDDEN);
+        return new McpConfig(false, "127.0.0.1", 8765, "", 300, DEFAULT_HIDDEN, List.of());
     }
 
     /** 只改开关的副本——设置面板拨动开关时用,其余字段保持用户手改的值。 */
     McpConfig withEnabled(boolean on) {
-        return new McpConfig(on, host, port, token, callTimeoutSeconds, hiddenTools);
+        return new McpConfig(on, host, port, token, callTimeoutSeconds, hiddenTools, allowedOrigins);
     }
 
     /** 写回配置文件:游戏内拨的开关要跨会话记住。 */
@@ -97,6 +115,9 @@ public record McpConfig(
         JsonArray hidden = new JsonArray();
         cfg.hiddenTools().forEach(hidden::add);
         o.add("hidden_tools", hidden);
+        JsonArray origins = new JsonArray();
+        cfg.allowedOrigins().forEach(origins::add);
+        o.add("allowed_origins", origins);
         try {
             Files.createDirectories(file.getParent());
             Files.writeString(file, o.toString(), StandardCharsets.UTF_8);

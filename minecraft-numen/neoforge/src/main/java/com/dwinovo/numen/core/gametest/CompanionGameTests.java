@@ -1,6 +1,5 @@
 package com.dwinovo.numen.core.gametest;
 
-import com.dwinovo.numen.core.Constants;
 import com.dwinovo.numen.core.tools.BlockActionTools;
 import com.dwinovo.numen.core.task.BuildTaskRecord;
 import net.minecraft.world.level.block.Blocks;
@@ -12,8 +11,6 @@ import com.dwinovo.numen.entity.NumenPlayer;
 import com.dwinovo.numen.task.TaskDispatch;
 import com.dwinovo.numen.task.TaskRecord;
 import net.minecraft.core.BlockPos;
-import net.minecraft.gametest.framework.BeforeBatch;
-import net.minecraft.gametest.framework.GameTest;
 import net.minecraft.gametest.framework.GameTestHelper;
 import net.minecraft.gametest.framework.StructureUtils;
 import net.minecraft.server.level.ServerLevel;
@@ -21,8 +18,6 @@ import net.minecraft.world.Difficulty;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
 import net.minecraft.world.phys.Vec3;
-import net.neoforged.neoforge.gametest.GameTestHolder;
-import net.neoforged.neoforge.gametest.PrefixGameTestTemplate;
 
 import java.util.List;
 import java.util.UUID;
@@ -39,16 +34,7 @@ import java.util.UUID;
  * {@code 测试原点+1+rel},而 {@link GameTestHelper#absolutePos} 只加 {@code rel}——引用
  * 模板内 rel y 的格子时要再 +1。
  */
-@GameTestHolder(Constants.MOD_ID)
-@PrefixGameTestTemplate(false)
 public class CompanionGameTests {
-
-    static {
-        String dir = System.getProperty("numen.gametest.structures");
-        if (dir != null) {
-            StructureUtils.testStructuresDir = dir;
-        }
-    }
 
     /**
      * 冒烟:同伴能在测试世界里存活并走完一段路。验证的是整条链路——假玩家生成
@@ -186,7 +172,8 @@ public class CompanionGameTests {
      * 一次 200ms 的真实搜索在这里折合上百游戏刻,超时必须覆盖"搜索墙钟 × tps"的放大。走完整生产链路——目标索引注册与
      * 查询、复合站位、眼及就地挖掘、探底波段、掉落拾取、背包计数。
      */
-    @GameTest(template = "real_spruce_forest", timeoutTicks = 100000, batch = "numen_mine")
+    @GameTest(template = "real_spruce_forest", timeoutTicks = 100000,
+            batch = "numen_mine", migrated = false)
     public static void mine_spruce_forest(GameTestHelper helper) {
         ServerLevel level = helper.getLevel();
         BlockPos spawn = helper.absolutePos(new BlockPos(1, 15, 1));
@@ -1128,7 +1115,9 @@ public class CompanionGameTests {
         var safe = com.dwinovo.numen.core.task.BuildStates.safeEntityData(frame, registries);
         helper.assertTrue(safe != null, "the frame itself is part of the building");
         // 剥在数据本身上:落位读的这份里已经没有那箱钻石了
-        var carriedNbt = safe.getCompound("Item").getCompound("components");
+        var carriedNbt = safe.getCompound("Item")
+                .flatMap(item -> item.getCompound("components"))
+                .orElseGet(net.minecraft.nbt.CompoundTag::new);
         helper.assertTrue(!carriedNbt.contains("minecraft:container"),
                 "a container component must be stripped from the DATA, not just from the price"
                         + " — otherwise the frame goes up holding 64 diamonds nobody paid for");
@@ -1420,7 +1409,8 @@ public class CompanionGameTests {
 
         // 主背包里 5 块,副手里 64 块
         inv.add(new ItemStack(Items.SPRUCE_PLANKS, 5));
-        inv.offhand.set(0, new ItemStack(Items.SPRUCE_PLANKS, 64));
+        inv.setItem(net.minecraft.world.entity.player.Inventory.SLOT_OFFHAND,
+                new ItemStack(Items.SPRUCE_PLANKS, 64));
 
         int whole = com.dwinovo.numen.core.task.PlayerInv.count(inv, Items.SPRUCE_PLANKS);
         int buildable = com.dwinovo.numen.core.task.PlayerInv
@@ -1743,7 +1733,7 @@ public class CompanionGameTests {
                         continue;
                     }
                     checked++;
-                    var id = net.minecraft.resources.ResourceLocation.tryParse("minecraft:" + word);
+                    var id = net.minecraft.resources.Identifier.tryParse("minecraft:" + word);
                     boolean known = id != null
                             && (net.minecraft.core.registries.BuiltInRegistries.BLOCK.containsKey(id)
                             || net.minecraft.core.registries.BuiltInRegistries.ITEM.containsKey(id));
@@ -2111,7 +2101,7 @@ public class CompanionGameTests {
         java.util.function.BiFunction<String, List<BlockPos>, List<BuildTaskRecord.Target>> vol =
                 (id, cells) -> {
                     var item = net.minecraft.core.registries.BuiltInRegistries.ITEM
-                            .get(net.minecraft.resources.ResourceLocation.parse(id));
+                            .getValue(net.minecraft.resources.Identifier.parse(id));
                     var block = item instanceof net.minecraft.world.item.BlockItem bi
                             ? bi.getBlock() : Blocks.AIR;
                     List<BuildTaskRecord.Target> out = new ArrayList<>();
@@ -2211,7 +2201,7 @@ public class CompanionGameTests {
         var server = level.getServer();
         try {
             var template = server.getStructureManager()
-                    .get(net.minecraft.resources.ResourceLocation.parse("minecraft:igloo/top")).orElseThrow();
+                    .get(net.minecraft.resources.Identifier.parse("minecraft:igloo/top")).orElseThrow();
             var tag = template.save(new net.minecraft.nbt.CompoundTag());
             java.nio.file.Path dir = com.dwinovo.numen.core.blueprint.BlueprintStore.dir(server);
             net.minecraft.nbt.NbtIo.writeCompressed(tag, dir.resolve("igloo_top.nbt"));
@@ -2285,7 +2275,8 @@ public class CompanionGameTests {
      * 真实深板岩矿袋(袋内 26 颗钻石矿):站在顶面,手持铁镐向下挖入,采得 2 颗钻石。
      * 覆盖埋矿的挖入站位语义与索引查询。
      */
-    @GameTest(template = "real_diamond_pocket", timeoutTicks = 100000, batch = "numen_mine")
+    @GameTest(template = "real_diamond_pocket", timeoutTicks = 100000,
+            batch = "numen_mine", migrated = false)
     public static void mine_diamond_pocket(GameTestHelper helper) {
         ServerLevel level = helper.getLevel();
         BlockPos spawn = helper.absolutePos(new BlockPos(8, 17, 8));
@@ -2566,8 +2557,8 @@ public class CompanionGameTests {
 
     /** 图纸夹具从测试结构目录拷进蓝图目录(幂等)。 */
     private static void copyCottageFixture(ServerLevel level) throws Exception {
-        java.nio.file.Path src = java.nio.file.Path.of(
-                StructureUtils.testStructuresDir, "japanese_cottage.litematic");
+        java.nio.file.Path src = StructureUtils.testStructuresDir
+                .resolve("japanese_cottage.litematic");
         java.nio.file.Files.copy(src,
                 com.dwinovo.numen.core.blueprint.BlueprintStore.dir(level.getServer())
                         .resolve("japanese_cottage.litematic"),

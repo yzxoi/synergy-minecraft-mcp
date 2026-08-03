@@ -39,6 +39,16 @@ neoForge {
             this.file("runs/server").createParentDirectories()
             gameDirectory = this.mkdir(this.file("runs/server"))
         }
+        gameTestServer {
+            type = "gameTestServer"
+            gameDirectory = this.mkdir(this.file("runs/gametest"))
+            systemProperty 'numen.gametest.structures', file('gameteststructures').getAbsolutePath()
+            // Keep the default developer run bounded. Use -PnumenGameTests=all to register
+            // the complete migrated suite once its long-running fixtures are ready for CI.
+            systemProperty 'numen.gametest.tests',
+                    providers.gradleProperty('numenGameTests').getOrElse(
+                            'companion_goto,build_block_ids_and_material_counts')
+        }
     }
     mods {
         "${mod_id}" {
@@ -48,11 +58,6 @@ neoForge {
 }
 
 sourceSets.main {
-    // NeoForge 21.11 removed the annotation-based @GameTest/@BeforeBatch API in
-    // favour of RegisterGameTestsEvent + registry-backed GameTestInstance data.
-    // Keep the migrated 1.21.1 suite in-tree as the rewrite source, but do not
-    // ship or compile it as production code until it uses the new registry API.
-    java.exclude 'com/dwinovo/numen/core/gametest/CompanionGameTests.java'
     resources { srcDir 'src/generated/resources' }
 }
 

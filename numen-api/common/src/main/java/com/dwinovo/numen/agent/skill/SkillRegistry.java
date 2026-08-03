@@ -342,7 +342,8 @@ public final class SkillRegistry {
 
     /**
      * 三级披露:读取技能目录内的一个附属文件(SKILL.md 正文以相对路径引用,
-     * 模型按需拉取)。路径规范化后必须仍在技能目录内——拒绝任何形式的穿越。
+     * 模型按需拉取)。词法路径和解析符号链接后的真实路径都必须仍在技能目录内——
+     * 拒绝 {@code ..}、绝对路径以及指向目录外的符号链接或 junction。
      *
      * @return 文件文本;技能不存在、路径越界、文件缺失或超限时抛 IllegalArgumentException
      */
@@ -362,11 +363,16 @@ public final class SkillRegistry {
                 throw new IllegalArgumentException("no such file in skill " + skillName + ": " + relPath
                         + "; available: " + String.join(", ", listSupportFiles(skillName)));
             }
-            if (Files.size(target) > SUPPORT_FILE_MAX_BYTES) {
+            Path realDir = dir.toRealPath();
+            Path realTarget = target.toRealPath();
+            if (!realTarget.startsWith(realDir)) {
+                throw new IllegalArgumentException("file must stay inside the skill directory");
+            }
+            if (Files.size(realTarget) > SUPPORT_FILE_MAX_BYTES) {
                 throw new IllegalArgumentException(relPath + " exceeds the "
                         + (SUPPORT_FILE_MAX_BYTES / 1024) + "KB support-file cap");
             }
-            return Files.readString(target, StandardCharsets.UTF_8);
+            return Files.readString(realTarget, StandardCharsets.UTF_8);
         } catch (IOException e) {
             throw new IllegalArgumentException("cannot read " + relPath + ": " + e.getMessage(), e);
         }

@@ -6,3 +6,39 @@ plugins {
     // see https://projects.neoforged.net/neoforged/moddevgradle for new versions
     id 'net.neoforged.moddev' version '2.0.141' apply false
 }
+
+def requiredTagResources = [
+        'data/numen/tags/item/tame_foods.json',
+        'data/numen/tags/item/scaffolds.json',
+        'data/numen/tags/block/do_not_break.json',
+        'data/numen/tags/block/safe_block_entity_data.json'
+]
+
+tasks.register('verifyTagResources') {
+    group = 'verification'
+    description = 'Verifies that both distributable loader jars contain Numen\'s datapack tags.'
+    dependsOn ':fabric:remapJar', ':neoforge:jar'
+
+    doLast {
+        def loaderArchives = [
+                fabric  : project(':fabric').tasks.named('remapJar').get().archiveFile.get().asFile,
+                neoforge: project(':neoforge').tasks.named('jar').get().archiveFile.get().asFile
+        ]
+
+        loaderArchives.each { loader, archive ->
+            if (!archive.isFile()) {
+                throw new GradleException("${loader} distributable jar does not exist: ${archive}")
+            }
+
+            def zip = new java.util.zip.ZipFile(archive)
+            try {
+                def missing = requiredTagResources.findAll { zip.getEntry(it) == null }
+                if (!missing.isEmpty()) {
+                    throw new GradleException("${archive.name} is missing required tag resources: ${missing.join(', ')}")
+                }
+            } finally {
+                zip.close()
+            }
+        }
+    }
+}
