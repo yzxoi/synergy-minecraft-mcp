@@ -37,7 +37,7 @@ import net.minecraft.world.phys.shapes.VoxelShape;
  *   <li>interrupted: {@code ABORT_DESTROY_BLOCK} + clear the crack.</li>
  * </ul>
  * Shared by path-obstruction clearing ({@code ExecHarness}), auto-mine
- * ({@code MineCompanionTask}), and {@link Interaction} (break_block / interact).
+ * ({@code MineCompanionTask}), and {@link Interaction} (interact_at left / right).
  */
 public final class BlockDigger {
 

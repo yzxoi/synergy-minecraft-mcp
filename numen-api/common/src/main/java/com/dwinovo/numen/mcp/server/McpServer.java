@@ -4,6 +4,7 @@ import com.dwinovo.numen.Constants;
 import com.dwinovo.numen.agent.tool.NumenTool;
 import com.dwinovo.numen.agent.tool.ToolRegistry;
 import com.dwinovo.numen.api.NumenActuator;
+import com.dwinovo.numen.task.TaskTerminalStore;
 import com.google.gson.Gson;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
@@ -495,7 +496,8 @@ public final class McpServer {
                 .replace("task_finished", "the built-in brain completion event")
                 .replace("status=done", "the built-in brain done status")
                 .replace("do not poll", "the built-in brain no-poll rule")
-                .replace("<current_task>", "the built-in brain current-task marker");
+                .replace("<current_task>", "the built-in brain current-task marker")
+                .replace("break_block", "interact_at(button=\"left\", x,y,z)");
     }
 
     private JsonObject toolDef(String name, String description, JsonObject inputSchema) {
@@ -663,6 +665,10 @@ public final class McpServer {
     private JsonObject handleToolInvoke(String toolName, JsonObject args) throws Exception {
         UUID target = resolveCompanion(args);
         if (target == null) {
+            if ("task_status".equals(toolName)) {
+                String retained = retainedDeadTaskStatus(args);
+                if (retained != null) return content(retained, false);
+            }
             return content("this tool needs a 'companion' argument (a name or id from list_companions)", true);
         }
         JsonObject toolArgs = args.deepCopy();
@@ -677,6 +683,24 @@ public final class McpServer {
             // non-JSON result — treat as plain text, not an error
         }
         return content(result, isError);
+    }
+
+    /** Resolve a retained terminal receipt after the body has temporarily despawned on death. */
+    private String retainedDeadTaskStatus(JsonObject args) {
+        if (!args.has("companion") || args.get("companion").isJsonNull()
+                || !args.has("task_id") || args.get("task_id").isJsonNull()) return null;
+        try {
+            String raw = args.get("companion").getAsString().trim();
+            String taskId = args.get("task_id").getAsString().trim();
+            try {
+                UUID companion = UUID.fromString(raw);
+                return TaskTerminalStore.statusJson(companion, taskId);
+            } catch (IllegalArgumentException notUuid) {
+                return TaskTerminalStore.statusJsonByName(raw, taskId);
+            }
+        } catch (IllegalArgumentException ignored) {
+            return null;
+        }
     }
 
     /** Resolve the {@code companion} argument (name or UUID) to a live companion's UUID, or null. */

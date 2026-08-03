@@ -64,6 +64,12 @@ public record TaskResult(boolean success,
         return new TaskResult(false, message, false, true, Map.of());
     }
 
+    /** Cancellation with a structured reason (for example a body death). */
+    public static TaskResult cancelled(String message, Map<String, Object> data) {
+        return new TaskResult(false, message, false, true,
+                data == null ? Map.of() : data);
+    }
+
     /**
      * Render this result as the JSON string consumed by the LLM. The shape
      * mirrors the field names exactly so a model trained on common

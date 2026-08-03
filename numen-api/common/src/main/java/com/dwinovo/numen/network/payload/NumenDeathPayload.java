@@ -50,6 +50,7 @@ public record NumenDeathPayload(UUID entityUuid, String cause, long respawnDelay
     /** Client-side handler. Runs on the client main thread (network layer arranges that). */
     public static void handle(NumenDeathPayload p) {
         Constants.LOG.info("[numen-net] numen_death entity={} ({}) — suspending loop", p.entityUuid(), p.cause());
+        com.dwinovo.numen.client.agent.CompanionCameraSync.onDeath(p.entityUuid());
         AgentLoopRegistry.get(p.entityUuid()).ifPresent(loop -> loop.onEntityDied(p.cause()));
         // Keep it in the roster (marked dead) so the HUD / rail can show the respawn countdown;
         // it goes live again on NumenRespawnPayload.

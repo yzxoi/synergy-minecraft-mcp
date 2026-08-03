@@ -176,7 +176,25 @@ public final class LlmTaskChain implements TaskChain {
      * Death: drop the running task WITHOUT a result — the client's death payload
      * already resolved the call.
      */
-    void dropActiveNoResult() {
+    void dropActiveNoResult(NumenPlayer companion, String deathCause) {
+        if (task != null) {
+            // Death resolves the client call through NumenDeathPayload; release
+            // server-side navigation/search resources without emitting a second result.
+            task.discard();
+        }
+        if (record != null && record.isExternalCall()) {
+            record.setState(TaskState.CANCELLED);
+            record.setResult(TaskResult.cancelled(
+                    "companion died: " + deathCause,
+                    java.util.Map.of(
+                            "termination_reason", "death",
+                            "death_cause", deathCause,
+                            "companion_alive", false)));
+            TaskTerminalStore.remember(companion.getUUID(), companion.getName().getString(), record,
+                    companion.level().getGameTime());
+        }
+        queue.cancelPendingForDeath(companion.getUUID(), companion.getName().getString(), deathCause,
+                companion.level().getGameTime());
         task = null;
         record = null;
     }

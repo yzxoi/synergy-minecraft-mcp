@@ -22,7 +22,7 @@ import net.minecraft.world.phys.Vec3;
  * The most-native interaction primitive for a fake-player body:
  * aim the eyes at a target, then "press"
  * one mouse button (left = ATTACK, right = USE) with a {@link Timing}. Every
- * higher-level action is a thin layer on top: {@code break_block} = ATTACK a
+ * higher-level action is a thin layer on top: {@code interact_at(button=left)} = ATTACK a
  * block (hold), {@code place_block} = USE a block (once), {@code melee_attack} = ATTACK an
  * entity, eat/bow = hold USE in the air.
  *

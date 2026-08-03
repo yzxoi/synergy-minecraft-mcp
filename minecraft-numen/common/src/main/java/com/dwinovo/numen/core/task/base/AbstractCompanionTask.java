@@ -79,6 +79,8 @@ public abstract class AbstractCompanionTask<R extends TaskRecord>
      * instead of running {@link #onTick()}.
      */
     private TaskState pendingTerminal;
+    /** Guards cleanup when a lifecycle discard is followed by another terminal path. */
+    private boolean resourcesReleased;
 
     // ---- sub-task composition state (see runChild) ----
     /** The child sub-goal currently being delegated to, or {@code null}. */
@@ -167,8 +169,14 @@ public abstract class AbstractCompanionTask<R extends TaskRecord>
 
     @Override
     public final TaskResult buildResult(TaskState finalState) {
-        cleanup();
+        releaseResources();
         Map<String, Object> data = new HashMap<>(resultData());
+        // A task result is historical. Include the body identity and world clock
+        // so callers do not mistake a pre-respawn final position for the current body.
+        data.put("companion_uuid", player.getUUID().toString());
+        data.put("entity_id", player.getId());
+        data.put("dimension", player.level().dimension().identifier().toString());
+        data.put("game_time", player.level().getGameTime());
         if (finalState == TaskState.FAILED) {
             data.put("failure_code", failType.name().toLowerCase(Locale.ROOT));
             data.put("recoverable_by_replan", recoverableByReplan(failType));
@@ -185,6 +193,21 @@ public abstract class AbstractCompanionTask<R extends TaskRecord>
             case CANCELLED -> new TaskResult(false, cancelledMessage(), false, true, data);
             default        -> TaskResult.fail(doneReason, data);   // FAILED and any stray state
         };
+    }
+
+    /**
+     * Lifecycle-only termination. Unlike {@link #buildResult(TaskState)}, this
+     * deliberately emits no result and is therefore safe for death handling,
+     * where the death payload owns the client-facing resolution.
+     */
+    public final void discard() {
+        releaseResources();
+    }
+
+    private void releaseResources() {
+        if (resourcesReleased) return;
+        resourcesReleased = true;
+        cleanup();
     }
 
     // ---------------------------------------------------------------------

@@ -137,7 +137,9 @@ final class CompanionBrain {
         body = companion;
         // Death ends the task session — the task-scoped hand pin goes with it.
         TaskSessionHooks.fireSessionEnd(companion);
-        llm.dropActiveNoResult();
+        String cause = companion.getCombatTracker().getDeathMessage().getString();
+        if (cause == null || cause.isBlank()) cause = "unknown cause";
+        llm.dropActiveNoResult(companion, cause);
         bodyLog.flush();
     }
 }

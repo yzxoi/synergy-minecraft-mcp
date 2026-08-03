@@ -972,6 +972,16 @@ public final class PathExecutor {
         return ticksSinceProgress;
     }
 
+    /**
+     * Whether the current movement is actively breaking a block this tick.
+     * Digging deliberately keeps the liveness lease alive even when the
+     * player's feet do not move; callers must not confuse it with a planner
+     * replan, which has no current executor and therefore returns false.
+     */
+    public boolean isDigging() {
+        return harness.isDigging();
+    }
+
     /** 本 tick 执行器的疾跑决策结果(由拥有者落到实体上)。 */
     public boolean isSprinting() {
         return sprintNextTick;
