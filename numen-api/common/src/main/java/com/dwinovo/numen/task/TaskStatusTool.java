@@ -38,17 +38,26 @@ public final class TaskStatusTool implements NumenTool {
         TaskRecord rec = requested.isEmpty()
                 ? CompanionTickDispatcher.asyncTaskFor(companion.getUUID())
                 : CompanionTickDispatcher.taskById(companion.getUUID(), requested);
+        reply.accept(resultFor(rec, requested, companion.level().getGameTime()));
+    }
+
+    /**
+     * Render a task lookup without requiring a Minecraft body.  Keeping the
+     * response shaping here makes the terminal-state contract testable and
+     * prevents future callers from collapsing a retained result back to the
+     * ambiguous "body idle" response.
+     */
+    static String resultFor(TaskRecord rec, String requested, long nowGameTime) {
         if (rec == null) {
-            String message = requested.isEmpty()
+            String normalized = requested == null ? "" : requested;
+            String message = normalized.isEmpty()
                     ? "身体空闲,没有后台任务。"
-                    : "没有找到任务 " + requested + "；它可能不存在或已超出最近任务保留窗口。";
-            reply.accept(TaskResult.ok(message, Map.of(
-                    "state", requested.isEmpty() ? "idle" : "unknown",
-                    "task_id", requested)).toJson());
-            return;
+                    : "没有找到任务 " + normalized + "；它可能不存在或已超出最近任务保留窗口。";
+            return TaskResult.ok(message, Map.of(
+                    "state", normalized.isEmpty() ? "idle" : "unknown",
+                    "task_id", normalized)).toJson();
         }
-        long now = companion.level().getGameTime();
-        TaskSnapshot snapshot = TaskSnapshot.capture(rec, now);
-        reply.accept(TaskResult.ok(snapshot.summary(), snapshot.toData()).toJson());
+        TaskSnapshot snapshot = TaskSnapshot.capture(rec, nowGameTime);
+        return TaskResult.ok(snapshot.summary(), snapshot.toData()).toJson();
     }
 }

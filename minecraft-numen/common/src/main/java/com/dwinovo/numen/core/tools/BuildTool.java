@@ -729,7 +729,11 @@ public final class BuildTool implements NumenTool {
 
     static List<BuildTaskRecord.Target> parseTargets(List<BlockSpec> blocks) {
         if (blocks == null || blocks.isEmpty()) {
-            throw new IllegalArgumentException("blocks must contain at least one cell");
+            // This helper is only used by the `set` op.  The public build
+            // contract is an ordered `ops` stream; mentioning the retired
+            // `blocks` payload here made a valid tools/list schema look
+            // inconsistent with the runtime error.
+            throw new IllegalArgumentException("build set op must contain at least one cell");
         }
         if (blocks.size() > MAX_BLOCKS) {
             throw new IllegalArgumentException("build accepts at most " + MAX_BLOCKS + " cells");
