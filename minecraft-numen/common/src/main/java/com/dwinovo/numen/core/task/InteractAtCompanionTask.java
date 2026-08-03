@@ -98,7 +98,7 @@ public final class InteractAtCompanionTask extends GoToThenDoTask<InteractAtTask
                         .getKey(player.level().getBlockState(blocker).getBlock()).getPath();
                 fail("aim " + aimLabel() + " is blocked from here — the crosshair lands on "
                         + blockerId + " at " + blocker.getX() + "," + blocker.getY() + ","
-                        + blocker.getZ() + " instead. break_block that blocker, or goto the"
+                        + blocker.getZ() + " instead. Use interact_at with button=left on that blocker, or goto the"
                         + " target's open side, then retry.", FailureType.OCCLUDED);
                 return TaskState.FAILED;
             }
