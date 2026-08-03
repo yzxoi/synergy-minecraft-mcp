@@ -1,5 +1,6 @@
 package com.dwinovo.numen.entity;
 
+import com.dwinovo.numen.Constants;
 import com.mojang.authlib.GameProfile;
 import net.minecraft.core.UUIDUtil;
 import net.minecraft.world.level.storage.ValueInput;
@@ -40,6 +41,11 @@ public final class NumenPlayer extends ServerPlayer {
 
     /** Latched once we've handled this body's death, so the post-death routine runs exactly once. */
     private boolean deathHandled;
+
+    /** Monotonic tick count used to rate-limit diagnostics from the fake-player physics pass. */
+    private long diagnosticTickCount;
+    /** Tick at which the last doTick failure was logged. */
+    private long lastDoTickFailureLog = Long.MIN_VALUE;
 
     public NumenPlayer(MinecraftServer server, ServerLevel level, GameProfile profile,
                         ClientInformation clientInformation) {
@@ -129,6 +135,7 @@ public final class NumenPlayer extends ServerPlayer {
      */
     @Override
     public void tick() {
+        diagnosticTickCount++;
         // A fake player isn't auto-removed on death (no client to send a respawn packet), so it would
         // sit at 0 HP forever. Detect death once, hand off to the recoverable-death routine (stop the
         // brain, schedule a respawn at the owner), and skip the normal movement/AI tick for this corpse.
@@ -144,9 +151,24 @@ public final class NumenPlayer extends ServerPlayer {
         super.tick();
         try {
             this.doTick();
-        } catch (Exception ignored) {
-            // fake-connection internals can NPE on edge cases; a swallowed tick
-            // beats crashing the server for a cosmetic pass
+        } catch (Exception failure) {
+            // A fake connection can still trip vanilla packet/stat paths on an edge
+            // case. Keep the server alive, but never hide the only physics pass: the
+            // first failure and then one every 200 ticks include enough identity and
+            // input state to correlate it with a stalled action in the logs.
+            if (lastDoTickFailureLog == Long.MIN_VALUE
+                    || diagnosticTickCount - lastDoTickFailureLog >= 200) {
+                lastDoTickFailureLog = diagnosticTickCount;
+                Constants.LOG.warn(
+                        "[numen-body] doTick failed (continuing safely): uuid={} identity={} "
+                                + "dimension={} pos={},{},{} input={}/{} tick={} cause={}",
+                        getUUID(), System.identityHashCode(this),
+                        level().dimension().identifier(),
+                        String.format("%.3f", getX()), String.format("%.3f", getY()),
+                        String.format("%.3f", getZ()),
+                        String.format("%.3f", xxa), String.format("%.3f", zza),
+                        diagnosticTickCount, failure.toString(), failure);
+            }
         }
     }
 

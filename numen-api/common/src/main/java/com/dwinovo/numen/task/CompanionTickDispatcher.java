@@ -31,6 +31,10 @@ import java.util.UUID;
 @com.dwinovo.numen.api.Internal
 public final class CompanionTickDispatcher {
 
+    /** Read-only scheduler/body state exposed to diagnostics and task_status. */
+    public record RuntimeSnapshot(String chain, float priority,
+                                   double x, double y, double z, long gameTime) {}
+
     private static final Map<UUID, CompanionBrain> BRAINS = new HashMap<>();
 
     private CompanionTickDispatcher() {}
@@ -101,6 +105,16 @@ public final class CompanionTickDispatcher {
     public static boolean llmLaneBusy(UUID companionUuid) {
         CompanionBrain brain = BRAINS.get(companionUuid);
         return brain != null && brain.llm.hasWork();
+    }
+
+    /** Return the last scheduler snapshot without probing chain priorities again. */
+    public static RuntimeSnapshot runtimeSnapshot(NumenPlayer companion) {
+        CompanionBrain brain = BRAINS.get(companion.getUUID());
+        return brain == null
+                ? new RuntimeSnapshot(null, Float.NEGATIVE_INFINITY,
+                        companion.getX(), companion.getY(), companion.getZ(),
+                        companion.level().getGameTime())
+                : brain.runtimeSnapshot(companion);
     }
 
     /**

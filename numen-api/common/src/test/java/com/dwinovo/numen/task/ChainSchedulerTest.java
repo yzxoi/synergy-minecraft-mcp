@@ -10,6 +10,7 @@ import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertEquals;
 
 /**
  * Pure tests for {@link ChainScheduler#select} — no Minecraft: the fake chains
@@ -72,5 +73,26 @@ class ChainSchedulerTest {
 
         // Base-priority (0) still beats NEGATIVE_INFINITY, so the active chain wins.
         assertSame(active, ChainScheduler.select(List.of(dormant, active), null));
+    }
+
+    @Test
+    void selectionReportsThePriorityFromTheWinningPass() {
+        FakeChain low = new FakeChain("low", 1.0f);
+        FakeChain high = new FakeChain("high", 5.0f);
+
+        ChainScheduler.Selection selection =
+                ChainScheduler.selectWithPriority(List.of(low, high), null);
+
+        assertSame(high, selection.chain());
+        assertEquals(5.0f, selection.priority());
+    }
+
+    @Test
+    void dormantSelectionReportsNegativeInfinity() {
+        ChainScheduler.Selection selection = ChainScheduler.selectWithPriority(
+                List.of(new FakeChain("dormant", Float.NEGATIVE_INFINITY)), null);
+
+        assertNull(selection.chain());
+        assertEquals(Float.NEGATIVE_INFINITY, selection.priority());
     }
 }

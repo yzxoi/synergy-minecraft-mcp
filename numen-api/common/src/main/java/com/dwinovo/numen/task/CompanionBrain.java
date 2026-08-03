@@ -51,6 +51,9 @@ final class CompanionBrain {
 
     /** Last tick's winner, so we can fire {@code onInterrupt} exactly on the switching edge. */
     private TaskChain running;
+    /** Runtime diagnostics captured from the same priority pass that selected {@link #running}. */
+    private String activeChain;
+    private float activePriority = Float.NEGATIVE_INFINITY;
 
     /** Task-idle edge for the hand pin (pure counter; see {@link #HAND_PIN_GRACE_TICKS}). */
     private final com.dwinovo.numen.task.HandPinRelease handPinRelease =
@@ -90,7 +93,10 @@ final class CompanionBrain {
             TaskSessionHooks.fireSessionEnd(companion);
         }
 
-        TaskChain best = ChainScheduler.select(chains, companion);
+        ChainScheduler.Selection selection = ChainScheduler.selectWithPriority(chains, companion);
+        TaskChain best = selection.chain();
+        activeChain = best == null ? null : best.name();
+        activePriority = selection.priority();
 
         if (best == null) {
             // Everything dormant (idle body). Release whoever held control, then
@@ -126,6 +132,13 @@ final class CompanionBrain {
         // survival chain holds the body. (A no-op when llm.tick already finalized.)
         llm.finalizeTerminal();
         llm.drainResults(companion);
+    }
+
+    /** Snapshot for task_status; no Minecraft objects escape the dispatcher API. */
+    CompanionTickDispatcher.RuntimeSnapshot runtimeSnapshot(NumenPlayer companion) {
+        return new CompanionTickDispatcher.RuntimeSnapshot(activeChain, activePriority,
+                companion.getX(), companion.getY(), companion.getZ(),
+                companion.level().getGameTime());
     }
 
     /**
