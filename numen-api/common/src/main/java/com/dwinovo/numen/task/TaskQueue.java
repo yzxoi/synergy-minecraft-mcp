@@ -142,6 +142,11 @@ public final class TaskQueue {
 
     /** Cancel only external pending work during body death; internal calls are resolved by the death payload. */
     public void cancelPendingForDeath(java.util.UUID companion, String cause, long observedGameTime) {
+        cancelPendingForDeath(companion, null, cause, observedGameTime);
+    }
+
+    public void cancelPendingForDeath(java.util.UUID companion, String companionName,
+                                      String cause, long observedGameTime) {
         var it = pending.iterator();
         while (it.hasNext()) {
             TaskRecord r = it.next();
@@ -154,7 +159,7 @@ public final class TaskQueue {
                             "termination_reason", "death",
                             "death_cause", cause,
                             "companion_alive", false)));
-            TaskTerminalStore.remember(companion, r, observedGameTime);
+            TaskTerminalStore.remember(companion, companionName, r, observedGameTime);
         }
     }
 }

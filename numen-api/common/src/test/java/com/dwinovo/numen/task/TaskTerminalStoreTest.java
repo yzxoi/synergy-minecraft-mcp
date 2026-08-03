@@ -31,6 +31,19 @@ class TaskTerminalStoreTest {
                 .getAsJsonObject("data").get("termination_reason").getAsString());
     }
 
+    @Test
+    void deathReceiptCanAlsoBeQueriedByDisplayName() {
+        UUID companion = UUID.randomUUID();
+        TaskRecord record = new TestRecord("mcp-name-test");
+        record.setState(TaskState.CANCELLED);
+        record.setResult(TaskResult.cancelled("companion died", Map.of("termination_reason", "death")));
+
+        TaskTerminalStore.remember(companion, "sama", record, 1234L);
+
+        String json = TaskTerminalStore.statusJsonByName("SAMA", record.publicId());
+        assertTrue(json.contains("\"terminal\":true"));
+    }
+
     private static final class TestRecord extends TaskRecord {
         TestRecord(String callId) {
             super("goto", callId, 10_000L);

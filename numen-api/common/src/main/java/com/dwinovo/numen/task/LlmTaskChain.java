@@ -177,6 +177,11 @@ public final class LlmTaskChain implements TaskChain {
      * already resolved the call.
      */
     void dropActiveNoResult(NumenPlayer companion, String deathCause) {
+        if (task != null) {
+            // Death resolves the client call through NumenDeathPayload; release
+            // server-side navigation/search resources without emitting a second result.
+            task.discard();
+        }
         if (record != null && record.isExternalCall()) {
             record.setState(TaskState.CANCELLED);
             record.setResult(TaskResult.cancelled(
@@ -185,10 +190,10 @@ public final class LlmTaskChain implements TaskChain {
                             "termination_reason", "death",
                             "death_cause", deathCause,
                             "companion_alive", false)));
-            TaskTerminalStore.remember(companion.getUUID(), record,
+            TaskTerminalStore.remember(companion.getUUID(), companion.getName().getString(), record,
                     companion.level().getGameTime());
         }
-        queue.cancelPendingForDeath(companion.getUUID(), deathCause,
+        queue.cancelPendingForDeath(companion.getUUID(), companion.getName().getString(), deathCause,
                 companion.level().getGameTime());
         task = null;
         record = null;

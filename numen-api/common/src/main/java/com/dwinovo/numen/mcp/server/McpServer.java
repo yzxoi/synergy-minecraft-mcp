@@ -494,9 +494,14 @@ public final class McpServer {
         if (!args.has("companion") || args.get("companion").isJsonNull()
                 || !args.has("task_id") || args.get("task_id").isJsonNull()) return null;
         try {
-            UUID companion = UUID.fromString(args.get("companion").getAsString().trim());
-            return TaskTerminalStore.statusJson(companion,
-                    args.get("task_id").getAsString().trim());
+            String raw = args.get("companion").getAsString().trim();
+            String taskId = args.get("task_id").getAsString().trim();
+            try {
+                UUID companion = UUID.fromString(raw);
+                return TaskTerminalStore.statusJson(companion, taskId);
+            } catch (IllegalArgumentException notUuid) {
+                return TaskTerminalStore.statusJsonByName(raw, taskId);
+            }
         } catch (IllegalArgumentException ignored) {
             return null;
         }

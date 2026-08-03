@@ -18,14 +18,22 @@ public final class TaskTerminalStore {
 
     private TaskTerminalStore() {}
 
-    private record Entry(TaskRecord record, long observedGameTime, long expiresAtMillis) {}
+    private record Entry(UUID companion, String companionName, TaskRecord record,
+                         long observedGameTime, long expiresAtMillis) {}
 
     public static synchronized void remember(UUID companion, TaskRecord record, long observedGameTime) {
+        remember(companion, null, record, observedGameTime);
+    }
+
+    /** Retain the display name too, so callers can query during the death window by name. */
+    public static synchronized void remember(UUID companion, String companionName,
+                                              TaskRecord record, long observedGameTime) {
         if (companion == null || record == null || !record.getState().isTerminal()) return;
         long now = System.currentTimeMillis();
         Deque<Entry> history = ENTRIES.computeIfAbsent(companion, ignored -> new ArrayDeque<>());
         purge(history, now);
-        history.addLast(new Entry(record, observedGameTime, now + RETENTION_MILLIS));
+        history.addLast(new Entry(companion, companionName, record, observedGameTime,
+                now + RETENTION_MILLIS));
         while (history.size() > MAX_PER_COMPANION) history.removeFirst();
     }
 
@@ -49,6 +57,24 @@ public final class TaskTerminalStore {
             if (taskId.equals(entry.record.publicId())) {
                 TaskSnapshot snapshot = TaskSnapshot.capture(entry.record, entry.observedGameTime);
                 return TaskResult.ok(snapshot.summary(), snapshot.toData()).toJson();
+            }
+        }
+        return null;
+    }
+
+    /** Name-addressed variant used while the body is absent from the live roster. */
+    public static synchronized String statusJsonByName(String companionName, String taskId) {
+        if (companionName == null || companionName.isBlank() || taskId == null || taskId.isBlank()) return null;
+        long now = System.currentTimeMillis();
+        for (Deque<Entry> history : ENTRIES.values()) {
+            purge(history, now);
+            for (Entry entry : history.reversed()) {
+                if (entry.companionName != null
+                        && companionName.equalsIgnoreCase(entry.companionName)
+                        && taskId.equals(entry.record.publicId())) {
+                    TaskSnapshot snapshot = TaskSnapshot.capture(entry.record, entry.observedGameTime);
+                    return TaskResult.ok(snapshot.summary(), snapshot.toData()).toJson();
+                }
             }
         }
         return null;

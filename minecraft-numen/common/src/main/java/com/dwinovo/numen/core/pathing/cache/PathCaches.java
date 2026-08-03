@@ -58,7 +58,10 @@ public final class PathCaches {
      */
     public static LoadedChunks ensureSnapshot(ServerLevel level, BlockPos around) {
         LoadedChunks existing = SNAPSHOTS.get(level.dimension());
-        if (existing != null) {
+        // A respawn can move a companion to a new location before the next
+        // END_SERVER_TICK snapshot pulse. Reusing a snapshot from the old
+        // body location makes the new terrain look like AIR to the planner.
+        if (existing != null && existing.covers(around)) {
             return existing;
         }
         LoadedChunks built = snapshot(level, List.of(around));

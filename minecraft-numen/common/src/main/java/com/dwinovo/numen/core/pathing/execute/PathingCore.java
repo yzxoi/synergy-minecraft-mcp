@@ -231,6 +231,11 @@ public final class PathingCore {
         return LIVE.values();
     }
 
+    /** Remove this instance only if it is still the UUID's current core. */
+    public void unregisterIfCurrent() {
+        LIVE.remove(player.getUUID(), this);
+    }
+
     // ==================== 每 tick ====================
 
     /**
@@ -556,5 +561,9 @@ public final class PathingCore {
         goal = null;
         harness.clearAllKeys();
         harness.stopBreaking();
+        // A respawned body may register a new core for the same UUID before an
+        // old one is cleaned up. Conditional removal prevents this old core
+        // from deleting the new instance from the debug/live registry.
+        unregisterIfCurrent();
     }
 }

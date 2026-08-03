@@ -80,6 +80,12 @@ public final class CompanionFactory {
         if (pos != null) {
             player.teleportTo(level, pos.x, pos.y, pos.z, Set.of(), player.getYRot(), player.getXRot(), false);
         }
+        // Saved player data can contain the old body's held movement inputs and
+        // horizontal momentum. A newly spawned body must begin from rest, or a
+        // stale path can immediately carry it away from the respawn position.
+        InputDriver.halt(player);
+        player.setShiftKeyDown(false);
+        player.resetFallDistance();
         return player;
     }
 
