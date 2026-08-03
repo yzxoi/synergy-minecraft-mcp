@@ -142,7 +142,7 @@ public final class NumenActuator {
      * Run one tool for {@code companion} directly — the same tools the built-in
      * brain uses (see {@link ToolRegistry#all()} for the catalogue), invoked
      * without the LLM. Perception tools resolve fast; world-action tools resolve
-     * when the body finishes the task.
+     * after the body finishes the task.
      *
      * <p>不需要先取得控制权:内置大脑要么被「外接大脑」模式整体挂起,要么和这次调用
      * 一起受"一具身体一件活"闸门约束(身体忙时收到带话术的拒绝)。The future carries

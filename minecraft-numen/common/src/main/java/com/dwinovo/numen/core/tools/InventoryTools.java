@@ -18,7 +18,7 @@ import java.util.List;
 import java.util.Set;
 
 /**
- * Inventory-management tools authored on the {@link NumenAction} surface —
+ * Inventory-management tools from the former {@code @NumenAction} authoring surface —
  * equip / eat / drop / collect / wait, migrated from the hand-written
  * {@code NumenTool} classes they replace. Each returns a {@link TaskRecord},
  * so the adapter ships it to the body and the task queue runs it; the

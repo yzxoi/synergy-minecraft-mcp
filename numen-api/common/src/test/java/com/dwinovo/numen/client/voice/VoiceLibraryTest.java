@@ -130,9 +130,9 @@ class VoiceLibraryTest {
     @Test
     void enabledFlagPersists() {
         VoiceLibrary lib = fresh();
-        assertFalse(lib.enabled());   // 缺省关闭
-        lib.setEnabled(true);
-        assertTrue(fresh().enabled());
+        assertTrue(lib.enabled());   // 缺省开启,配置声线后即可出声
+        lib.setEnabled(false);
+        assertFalse(fresh().enabled());
     }
 
     @Test
@@ -142,6 +142,7 @@ class VoiceLibraryTest {
         VoiceLibrary.Entry e = openai(lib, "A");
         lib.assign(u, e.id());
         assertEquals(e.id(), lib.assignedEntry(u));
+        lib.setEnabled(false);
         assertNull(lib.resolve(u));           // 总开关关闭 → 静音
         lib.setEnabled(true);
         assertEquals(e.id(), lib.resolve(u).id());
@@ -207,7 +208,7 @@ class VoiceLibraryTest {
     void missingFileStartsEmpty() {
         VoiceLibrary lib = fresh();
         assertTrue(lib.list().isEmpty());
-        assertFalse(lib.enabled());
+        assertTrue(lib.enabled());
         assertNull(lib.resolve(UUID.randomUUID()));
     }
 }

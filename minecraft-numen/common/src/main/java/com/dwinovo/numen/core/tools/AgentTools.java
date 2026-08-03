@@ -10,7 +10,7 @@ import java.util.Set;
 import java.util.stream.Collectors;
 
 /**
- * Agent-side (client-local) tools authored on the {@link NumenAction} surface.
+ * Agent-side (client-local) tools from the former {@code @NumenAction} authoring surface.
  * These run on the agent thread with no server body — the adapter infers LOCAL
  * because the method takes neither the live entity nor a reply callback and
  * returns its result directly.

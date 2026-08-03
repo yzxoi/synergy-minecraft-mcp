@@ -18,7 +18,7 @@ import java.util.List;
 import java.util.Set;
 
 /**
- * Block-action tools authored on the {@link NumenAction} surface — the
+ * Block-action tools from the former {@code @NumenAction} authoring surface — the
  * world-action dogfood for construction and native interaction. Each method
  * validates its args and builds a {@link TaskRecord}; the {@link ToolContext}
  * carries the call id and deadline basis. Behaviour matches the hand-written
@@ -131,4 +131,3 @@ String item_id,
         };
     }
 }
-

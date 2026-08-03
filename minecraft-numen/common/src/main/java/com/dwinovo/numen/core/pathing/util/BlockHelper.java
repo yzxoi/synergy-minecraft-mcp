@@ -363,7 +363,7 @@ public final class BlockHelper {
     }
 
     /**
-     * Is this block breakable at all? Bedrock / unbreakable (hardness < 0) are
+     * Is this block breakable at all? Bedrock / unbreakable ({@code hardness < 0}) are
      * never breakable; air is a no-op (return false — nothing to break).
      */
     public static boolean isBreakable(BlockGetter level, BlockPos pos) {
