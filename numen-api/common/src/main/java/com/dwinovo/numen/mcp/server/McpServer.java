@@ -9,15 +9,20 @@ import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
+import com.google.gson.JsonPrimitive;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
 
 import java.io.IOException;
 import java.io.OutputStream;
 import java.net.InetSocketAddress;
+import java.net.URI;
+import java.net.URLDecoder;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
+import java.util.Locale;
 import java.util.UUID;
+import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
@@ -53,6 +58,8 @@ public final class McpServer {
     private static final int CONTROL_TIMEOUT_SECONDS = 10;
     /** 活动流里一条参数/结果摘要的截断长度——面板一行放得下即可。 */
     private static final int SUMMARY_LIMIT = 90;
+    /** Hard transport boundary: JSON-RPC messages larger than 1 MiB are rejected. */
+    static final int MAX_REQUEST_BODY_BYTES = 1024 * 1024;
 
     /**
      * Sent to the connecting agent in the {@code initialize} handshake (MCP's
@@ -82,30 +89,50 @@ public final class McpServer {
     private final McpConfig config;
     private final Gson gson = new Gson();
     private HttpServer http;
+    private ExecutorService executor;
 
     public McpServer(McpConfig config) {
         this.config = config;
     }
 
-    public void start() throws IOException {
+    public synchronized void start() throws IOException {
+        if (http != null) throw new IllegalStateException("server is already running");
         http = HttpServer.create(new InetSocketAddress(config.host(), config.port()), 0);
         http.createContext("/mcp", this::handle);
-        http.setExecutor(Executors.newFixedThreadPool(8, r -> {
+        executor = Executors.newFixedThreadPool(8, r -> {
             Thread t = new Thread(r, "numen-mcp-http");
             t.setDaemon(true);
             return t;
-        }));
+        });
+        http.setExecutor(executor);
         http.start();
     }
 
-    public void stop() {
-        if (http != null) http.stop(0);
+    public synchronized void stop() {
+        if (http != null) {
+            http.stop(0);
+            http = null;
+        }
+        if (executor != null) {
+            executor.shutdownNow();
+            executor = null;
+        }
+    }
+
+    /** Bound TCP port, primarily useful when tests request an ephemeral port ({@code 0}). */
+    synchronized int port() {
+        if (http == null) throw new IllegalStateException("server is not running");
+        return http.getAddress().getPort();
     }
 
     // ---- HTTP layer ----
 
     private void handle(HttpExchange ex) throws IOException {
         try {
+            if (!originAllowed(ex)) {
+                respond(ex, 403, "");
+                return;
+            }
             if (!"POST".equalsIgnoreCase(ex.getRequestMethod())) {
                 respond(ex, 405, "");
                 return;
@@ -116,28 +143,23 @@ public final class McpServer {
             }
             // 任何通过鉴权的请求都算"对方还在"——面板的活跃时间靠它,ping 也算数。
             McpMode.instance().touch();
-            String body = new String(ex.getRequestBody().readAllBytes(), StandardCharsets.UTF_8);
+            byte[] bytes = ex.getRequestBody().readNBytes(MAX_REQUEST_BODY_BYTES + 1);
+            if (bytes.length > MAX_REQUEST_BODY_BYTES) {
+                respond(ex, 413, "");
+                return;
+            }
+            String body = new String(bytes, StandardCharsets.UTF_8);
             JsonElement parsed;
             try {
                 parsed = JsonParser.parseString(body);
-            } catch (RuntimeException parseErr) {
-                respondJson(ex, errorResponse(null, -32700, "parse error: " + parseErr.getMessage()));
+            } catch (RuntimeException ignored) {
+                respondJson(ex, 400, errorResponse(null, -32700, "parse error"));
                 return;
             }
 
-            if (parsed.isJsonArray()) {   // JSON-RPC batch
-                JsonArray out = new JsonArray();
-                for (JsonElement el : parsed.getAsJsonArray()) {
-                    JsonObject r = dispatch(el.getAsJsonObject());
-                    if (r != null) out.add(r);
-                }
-                if (out.isEmpty()) respond(ex, 202, "");
-                else respondJson(ex, out);
-            } else {
-                JsonObject r = dispatch(parsed.getAsJsonObject());
-                if (r == null) respond(ex, 202, "");   // notification: no response
-                else respondJson(ex, r);
-            }
+            HttpResult result = process(parsed, ex.getRequestHeaders().get("MCP-Protocol-Version"));
+            if (result.body() == null) respond(ex, result.status(), "");
+            else respondJson(ex, result.status(), result.body());
         } catch (RuntimeException fatal) {
             Constants.LOG.warn("[numen-mcp] request failed: {}", fatal.toString());
             try { respond(ex, 500, ""); } catch (IOException ignored) {}
@@ -150,14 +172,81 @@ public final class McpServer {
         if (config.token().isBlank()) return true;
         String auth = ex.getRequestHeaders().getFirst("Authorization");
         if (auth != null && auth.equals("Bearer " + config.token())) return true;
-        String query = ex.getRequestURI().getQuery();
-        return query != null && query.contains("token=" + config.token());
+        String query = ex.getRequestURI().getRawQuery();
+        if (query == null) return false;
+        try {
+            for (String pair : query.split("&")) {
+                int equals = pair.indexOf('=');
+                String rawName = equals < 0 ? pair : pair.substring(0, equals);
+                String rawValue = equals < 0 ? "" : pair.substring(equals + 1);
+                String name = URLDecoder.decode(rawName, StandardCharsets.UTF_8);
+                String value = URLDecoder.decode(rawValue, StandardCharsets.UTF_8);
+                if ("token".equals(name) && config.token().equals(value)) return true;
+            }
+        } catch (IllegalArgumentException ignored) {
+            // Malformed percent-encoding is not a credential.
+        }
+        return false;
     }
 
-    private void respondJson(HttpExchange ex, JsonElement json) throws IOException {
+    private boolean originAllowed(HttpExchange ex) {
+        List<String> headers = ex.getRequestHeaders().get("Origin");
+        if (headers == null || headers.isEmpty()) return true; // native clients do not send Origin
+        if (headers.size() != 1) return false;
+        String origin = normalizeOrigin(headers.get(0));
+        if (origin == null) return false;
+
+        int boundPort = ex.getLocalAddress().getPort();
+        String ownOrigin = normalizeOrigin("http://" + hostForUri(config.host()) + ":" + boundPort);
+        if (origin.equals(ownOrigin)) return true;
+
+        URI parsed = URI.create(origin);
+        if (isLoopbackHost(config.host()) && isLoopbackHost(parsed.getHost())
+                && parsed.getPort() == boundPort && "http".equals(parsed.getScheme())) {
+            return true;
+        }
+        for (String allowed : config.allowedOrigins()) {
+            if (origin.equals(normalizeOrigin(allowed))) return true;
+        }
+        return false;
+    }
+
+    private static String normalizeOrigin(String raw) {
+        if (raw == null) return null;
+        try {
+            URI uri = URI.create(raw.trim());
+            String scheme = uri.getScheme() == null ? null : uri.getScheme().toLowerCase(Locale.ROOT);
+            String host = uri.getHost() == null ? null : uri.getHost().toLowerCase(Locale.ROOT);
+            String path = uri.getRawPath();
+            if (!("http".equals(scheme) || "https".equals(scheme)) || host == null
+                    || uri.getRawUserInfo() != null || uri.getRawQuery() != null || uri.getRawFragment() != null
+                    || (path != null && !path.isEmpty() && !"/".equals(path))) {
+                return null;
+            }
+            int port = uri.getPort();
+            if (port < 0) port = "https".equals(scheme) ? 443 : 80;
+            return scheme + "://" + hostForUri(host) + ":" + port;
+        } catch (IllegalArgumentException ignored) {
+            return null;
+        }
+    }
+
+    private static boolean isLoopbackHost(String host) {
+        if (host == null) return false;
+        String normalized = host.toLowerCase(Locale.ROOT);
+        return "127.0.0.1".equals(normalized) || "localhost".equals(normalized)
+                || "::1".equals(normalized) || "[::1]".equals(normalized);
+    }
+
+    private static String hostForUri(String host) {
+        return host.indexOf(':') >= 0 && !(host.startsWith("[") && host.endsWith("]"))
+                ? "[" + host + "]" : host;
+    }
+
+    private void respondJson(HttpExchange ex, int status, JsonElement json) throws IOException {
         byte[] bytes = gson.toJson(json).getBytes(StandardCharsets.UTF_8);
         ex.getResponseHeaders().add("Content-Type", "application/json");
-        ex.sendResponseHeaders(200, bytes.length);
+        ex.sendResponseHeaders(status, bytes.length);
         try (OutputStream os = ex.getResponseBody()) {
             os.write(bytes);
         }
@@ -175,15 +264,123 @@ public final class McpServer {
 
     // ---- JSON-RPC dispatch ----
 
-    /** @return the response object, or null for a notification (no id → no reply). */
+    private record HttpResult(int status, JsonElement body) {}
+
+    private HttpResult process(JsonElement message, List<String> protocolHeaders) {
+        // MCP Streamable HTTP 2025-06-18 carries exactly one JSON-RPC message per POST.
+        if (!message.isJsonObject()) {
+            return jsonError(400, null, -32600, "invalid request");
+        }
+        JsonObject req = message.getAsJsonObject();
+        JsonElement id = validId(req.get("id")) ? req.get("id") : null;
+        if (!validEnvelope(req)) {
+            return jsonError(400, id, -32600, "invalid request");
+        }
+
+        // A JSON-RPC response is valid transport input. This server currently sends no
+        // client-directed requests, so there is nothing to correlate and it is accepted.
+        if (!req.has("method")) {
+            if (!validProtocolHeader(protocolHeaders)) {
+                return jsonError(400, id, -32600, "unsupported MCP protocol version");
+            }
+            return new HttpResult(202, null);
+        }
+
+        String method = req.get("method").getAsString();
+        if (!"initialize".equals(method) && !validProtocolHeader(protocolHeaders)) {
+            return jsonError(400, id, -32600, "unsupported MCP protocol version");
+        }
+        if ("initialize".equals(method) && !req.has("id")) {
+            return jsonError(400, null, -32600, "initialize must be a request");
+        }
+
+        String paramsError = validateParams(req, method);
+        if (paramsError != null) {
+            // Notifications have no JSON-RPC response, but Streamable HTTP permits an
+            // HTTP error carrying an error object with a null id when they are rejected.
+            return jsonError(req.has("id") ? 200 : 400, id, -32602, paramsError);
+        }
+        if (!req.has("id")) return new HttpResult(202, null);
+        return new HttpResult(200, dispatch(req));
+    }
+
+    private static boolean validEnvelope(JsonObject req) {
+        if (!req.has("jsonrpc") || !req.get("jsonrpc").isJsonPrimitive()
+                || !req.getAsJsonPrimitive("jsonrpc").isString()
+                || !"2.0".equals(req.get("jsonrpc").getAsString())) {
+            return false;
+        }
+
+        if (req.has("method")) {
+            if (!req.get("method").isJsonPrimitive() || !req.getAsJsonPrimitive("method").isString()
+                    || req.get("method").getAsString().isBlank()) {
+                return false;
+            }
+            if (req.has("id") && !validId(req.get("id"))) return false;
+            return !req.has("result") && !req.has("error");
+        }
+
+        // JSON-RPC response: id plus exactly one of result/error.
+        if (!req.has("id") || !validId(req.get("id"))) return false;
+        boolean result = req.has("result");
+        boolean error = req.has("error");
+        return result != error && (!error || req.get("error").isJsonObject());
+    }
+
+    private static boolean validId(JsonElement id) {
+        if (id == null || id.isJsonNull() || !id.isJsonPrimitive()) return false;
+        JsonPrimitive primitive = id.getAsJsonPrimitive();
+        return primitive.isString() || primitive.isNumber();
+    }
+
+    private static boolean validProtocolHeader(List<String> values) {
+        // With no session state, 2025-06-18 says a missing header means 2025-03-26.
+        // This server only implements 2025-06-18, so missing, duplicate, and different
+        // values are all unsupported and must receive HTTP 400.
+        return values != null && values.size() == 1 && PROTOCOL_VERSION.equals(values.get(0));
+    }
+
+    private static String validateParams(JsonObject req, String method) {
+        if (req.has("params") && !req.get("params").isJsonObject()) {
+            return "params must be an object";
+        }
+        JsonObject params = req.has("params") ? req.getAsJsonObject("params") : null;
+        if ("initialize".equals(method)) {
+            if (params == null) return "initialize params are required";
+            if (!stringField(params, "protocolVersion")
+                    || !objectField(params, "capabilities")
+                    || !objectField(params, "clientInfo")) {
+                return "initialize requires protocolVersion, capabilities, and clientInfo";
+            }
+            JsonObject info = params.getAsJsonObject("clientInfo");
+            if (!stringField(info, "name") || !stringField(info, "version")) {
+                return "clientInfo requires string name and version";
+            }
+        } else if ("tools/call".equals(method)) {
+            if (params == null || !stringField(params, "name")
+                    || (params.has("arguments") && !params.get("arguments").isJsonObject())) {
+                return "tools/call requires a string name and optional object arguments";
+            }
+        }
+        return null;
+    }
+
+    private static boolean stringField(JsonObject object, String name) {
+        return object.has(name) && object.get(name).isJsonPrimitive()
+                && object.getAsJsonPrimitive(name).isString();
+    }
+
+    private static boolean objectField(JsonObject object, String name) {
+        return object.has(name) && object.get(name).isJsonObject();
+    }
+
+    private HttpResult jsonError(int status, JsonElement id, int code, String message) {
+        return new HttpResult(status, errorResponse(id, code, message));
+    }
+
     private JsonObject dispatch(JsonObject req) {
         JsonElement id = req.get("id");
-        String method = req.has("method") ? req.get("method").getAsString() : "";
-
-        // Notifications carry no id and expect no response.
-        if (id == null || id.isJsonNull()) {
-            return null;
-        }
+        String method = req.get("method").getAsString();
 
         try {
             return switch (method) {
@@ -193,21 +390,19 @@ public final class McpServer {
                 case "tools/call" -> okResponse(id, toolsCallResult(req));
                 default -> errorResponse(id, -32601, "method not found: " + method);
             };
-        } catch (RuntimeException ex) {
-            return errorResponse(id, -32603, "internal error: " + ex.getMessage());
+        } catch (RuntimeException error) {
+            Constants.LOG.warn("[numen-mcp] JSON-RPC method {} failed: {}", method, error.toString());
+            return errorResponse(id, -32603, "internal error");
         }
     }
 
     private JsonObject initializeResult(JsonObject req) {
-        String clientProto = PROTOCOL_VERSION;
-        if (req.has("params") && req.get("params").isJsonObject()) {
-            JsonObject p = req.getAsJsonObject("params");
-            if (p.has("protocolVersion")) clientProto = p.get("protocolVersion").getAsString();
-            // 握手报的名字就是面板上"谁接进来了"的那一行。
-            McpMode.instance().handshake(clientLabel(p));
-        }
+        JsonObject params = req.getAsJsonObject("params");
+        // If the client proposes another revision, lifecycle negotiation requires the
+        // server to choose a version it actually supports instead of echoing arbitrary input.
+        McpMode.instance().handshake(clientLabel(params));
         JsonObject result = new JsonObject();
-        result.addProperty("protocolVersion", clientProto);
+        result.addProperty("protocolVersion", PROTOCOL_VERSION);
         JsonObject caps = new JsonObject();
         caps.add("tools", new JsonObject());
         result.add("capabilities", caps);
@@ -347,7 +542,8 @@ public final class McpServer {
         } catch (TimeoutException te) {
             return content("timed out waiting for the action to finish", true);
         } catch (Exception ex) {
-            return content("call failed: " + ex.getMessage(), true);
+            Constants.LOG.warn("[numen-mcp] tool {} failed: {}", name, ex.toString());
+            return content("call failed; check the game state and try again", true);
         }
     }
 
