@@ -39,6 +39,12 @@ public final class LoadedChunks {
         return chunks.get(ChunkPos.asLong(chunkX, chunkZ));
     }
 
+    /** Whether this snapshot includes the chunk containing {@code pos}. */
+    public boolean covers(BlockPos pos) {
+        if (pos == null) return false;
+        return chunks.containsKey(ChunkPos.asLong(pos.getX() >> 4, pos.getZ() >> 4));
+    }
+
     /** Whether a block entity occupied {@code pos} when this snapshot was taken. Only meaningful for a
      *  position inside a captured chunk — {@link #blockEntities} is populated in lockstep with
      *  {@link #at}, and a cell outside the snapshot reads AIR (so the don't-grief check, which only

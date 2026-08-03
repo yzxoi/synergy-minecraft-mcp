@@ -231,6 +231,11 @@ public final class PathingCore {
         return LIVE.values();
     }
 
+    /** Remove this instance only if it is still the UUID's current core. */
+    public void unregisterIfCurrent() {
+        LIVE.remove(player.getUUID(), this);
+    }
+
     // ==================== 每 tick ====================
 
     /**
@@ -288,6 +293,14 @@ public final class PathingCore {
         BlockPos feetBefore = PathExecutor.playerFeet(player);
         safeToCancel = current.onTick();
         if (current.failed() || current.finished()) {
+            // The final movement tick may have populated the harness with a
+            // forward/strafe impulse before advancing the path cursor.  Clear
+            // it before the harness commit below; otherwise a terminal goto
+            // can coast past its reported final position until the next task
+            // tick (especially for fake ServerPlayers with no client packet to
+            // overwrite the input).
+            harness.clearAllKeys();
+            harness.stopBreaking();
             noteSegmentEnd(current, feetBefore);
             current = null;
             BlockPos feet = PathExecutor.playerFeet(player);
@@ -548,5 +561,9 @@ public final class PathingCore {
         goal = null;
         harness.clearAllKeys();
         harness.stopBreaking();
+        // A respawned body may register a new core for the same UUID before an
+        // old one is cleaned up. Conditional removal prevents this old core
+        // from deleting the new instance from the debug/live registry.
+        unregisterIfCurrent();
     }
 }

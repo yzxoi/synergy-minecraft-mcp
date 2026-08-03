@@ -35,7 +35,7 @@ class McpServerInstructionsTest {
         for (String name : List.of("goto", "mine", "build", "blueprint", "collect_items",
                 "fish", "melee_attack", "ranged_attack")) {
             String description = McpServer.descriptionForMcp(new FakeTool(name,
-                    "wait for task_finished; status=done; do not poll; while <current_task> exists"));
+                    "wait for task_finished; status=done; do not poll; while <current_task> exists; use break_block"));
             assertTrue(description.startsWith("MCP external driver:"), name);
             assertTrue(description.contains("task_status"), name);
             assertTrue(description.contains("data.terminal=true"), name);
@@ -45,10 +45,12 @@ class McpServerInstructionsTest {
             assertTrue(engineDetails.contains("built-in brain done status"), name);
             assertTrue(engineDetails.contains("built-in brain no-poll rule"), name);
             assertTrue(engineDetails.contains("built-in brain current-task marker"), name);
+            assertTrue(engineDetails.contains("interact_at(button=\"left\", x,y,z)"), name);
             assertFalse(engineDetails.contains("task_finished"), name);
             assertFalse(engineDetails.contains("status=done"), name);
             assertFalse(engineDetails.contains("do not poll"), name);
             assertFalse(engineDetails.contains("<current_task>"), name);
+            assertFalse(engineDetails.contains("break_block"), name);
         }
     }
 

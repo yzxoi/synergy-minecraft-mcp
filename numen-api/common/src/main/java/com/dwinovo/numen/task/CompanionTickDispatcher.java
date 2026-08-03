@@ -93,7 +93,8 @@ public final class CompanionTickDispatcher {
     /** Resolve an active, queued, or recently completed task by public id. */
     public static TaskRecord taskById(UUID companionUuid, String taskId) {
         CompanionBrain brain = BRAINS.get(companionUuid);
-        return brain == null ? null : brain.llm.taskById(taskId);
+        TaskRecord live = brain == null ? null : brain.llm.taskById(taskId);
+        return live != null ? live : TaskTerminalStore.find(companionUuid, taskId);
     }
 
     /** LLM 车道是否有任何工作(运行或排队,同步异步都算)。异步受理的占用判定用。 */

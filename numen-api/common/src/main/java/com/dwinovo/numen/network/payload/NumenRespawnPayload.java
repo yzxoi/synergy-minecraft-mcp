@@ -39,6 +39,7 @@ public record NumenRespawnPayload(UUID entityUuid, String cause) implements Cust
     public static void handle(NumenRespawnPayload p) {
         Constants.LOG.info("[numen-net] numen_respawn entity={} ({}) — resuming loop", p.entityUuid(), p.cause());
         com.dwinovo.numen.client.agent.ClientDeaths.clear(p.entityUuid());
+        com.dwinovo.numen.client.agent.CompanionCameraSync.onRespawn(p.entityUuid());
         AgentLoopRegistry.getOrCreate(p.entityUuid()).onRespawned(p.cause());
     }
 }

@@ -67,6 +67,7 @@ public class NumenNeoForgeClient {
         com.dwinovo.numen.client.NumenKeys.tick();
         com.dwinovo.numen.client.hud.NumenToasts.tick();
         com.dwinovo.numen.client.agent.AgentLoopRegistry.tickAll();
+        com.dwinovo.numen.client.agent.CompanionCameraSync.tick();
     }
 
     static void onLoggingOut(net.neoforged.neoforge.client.event.ClientPlayerNetworkEvent.LoggingOut event) {

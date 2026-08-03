@@ -64,6 +64,7 @@ public class NumenFabricClient implements ClientModInitializer {
                     com.dwinovo.numen.client.NumenKeys.tick();
                     com.dwinovo.numen.client.hud.NumenToasts.tick();
                     com.dwinovo.numen.client.agent.AgentLoopRegistry.tickAll();
+                    com.dwinovo.numen.client.agent.CompanionCameraSync.tick();
                 });
 
         // HUD: advancement-style activity toasts (top-right) when not watching a panel.

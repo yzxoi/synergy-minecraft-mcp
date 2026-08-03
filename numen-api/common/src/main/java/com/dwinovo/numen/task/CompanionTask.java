@@ -19,4 +19,15 @@ public interface CompanionTask {
 
     /** The result envelope handed back to the LLM. */
     TaskResult buildResult(TaskState finalState);
+
+    /**
+     * Release resources owned by a task without producing a result.
+     *
+     * <p>This is used by body lifecycle transitions (most notably death): the
+     * death payload already resolves the in-flight tool call, so finalizing a
+     * second result would be incorrect, but navigation/search handles and
+     * physical action state must still be stopped. Implementations that do not
+     * own resources may keep the default no-op.</p>
+     */
+    default void discard() {}
 }
