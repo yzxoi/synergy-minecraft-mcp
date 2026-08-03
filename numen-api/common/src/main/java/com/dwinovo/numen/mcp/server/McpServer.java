@@ -19,8 +19,9 @@ import java.net.InetSocketAddress;
 import java.net.URI;
 import java.net.URLDecoder;
 import java.nio.charset.StandardCharsets;
-import java.util.List;
 import java.util.Locale;
+import java.util.Set;
+import java.util.List;
 import java.util.UUID;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -61,6 +62,26 @@ public final class McpServer {
     /** Hard transport boundary: JSON-RPC messages larger than 1 MiB are rejected. */
     static final int MAX_REQUEST_BODY_BYTES = 1024 * 1024;
 
+    /** Long-running tools whose MCP caller receives a task receipt, not an event push. */
+    private static final Set<String> EXTERNAL_ASYNC_TOOLS = Set.of(
+            "goto", "mine", "build", "blueprint", "collect_items", "fish",
+            "melee_attack", "ranged_attack");
+
+    /**
+     * MCP is a request/response transport: external callers do not receive the
+     * built-in brain's {@code task_finished} event. Keep that distinction next
+     * to the tool-list projection so a stale engine description cannot make a
+     * remote caller wait forever for an event it can never observe.
+     */
+    private static final String EXTERNAL_ASYNC_GUIDANCE =
+            "MCP external driver: this action returns a task_id immediately. "
+                    + "Save it and call task_status with that task_id until data.terminal=true; "
+                    + "then inspect data.state and data.result and use perception to verify the world. "
+                    + "MCP callers do not receive task_finished events (that event is for the built-in brain only). "
+                    + "Do not resend the same action while its task is non-terminal; use task_stop to cancel it. "
+                    + "Ignore any task_finished or no-poll wording in the engine details below: that wording "
+                    + "applies only to the built-in brain, not to this MCP transport.";
+
     /**
      * Sent to the connecting agent in the {@code initialize} handshake (MCP's
      * {@code instructions} field) — what Numen is and how to drive it, so any
@@ -75,11 +96,16 @@ public final class McpServer {
 
             Loop: (1) list_companions to see who is live — create_companion by name to summon a new one, \
             delete_companion to dismiss one for good; (2) perceive with get_self_status / scan_blocks / \
-            scan_nearby_entities; (3) act with move_to / auto_mine / place_block / craft / equip_item / \
-            hunt / etc. Long actions return a task_id at once — poll task_status with that task_id until \
+            scan_nearby_entities; (3) act with goto / mine / build / craft / equip_item / fish / \
+            melee_attack / ranged_attack / interact_at / etc. Long actions return a task_id at once — \
+            poll task_status with that task_id until \
             its state is terminal, inspect its structured result, then perceive to confirm. Every action \
             tool takes a 'companion' argument (name or id), so each \
             call targets one companion; just drive it, there is no take-control step.
+
+            The canonical action names, parameters, and JSON Schemas are always the live results of \
+            tools/list. Treat this text as orientation only: do not hard-code a name or argument from \
+            memory, and re-check tools/list whenever the server or mod version changes.
 
             Rules: survival mode — the tools do only what a real player can (mine to get stone; there is no \
             give or setblock). You are blind between calls, so perceive before and after acting. A running \
@@ -443,12 +469,33 @@ public final class McpServer {
 
         for (NumenTool tool : ToolRegistry.all()) {
             if (config.isHidden(tool.name())) continue;
-            tools.add(toolDef(tool.name(), tool.description(), withCompanion(tool.parameterSchema())));
+            tools.add(toolDef(tool.name(), descriptionForMcp(tool), withCompanion(tool.parameterSchema())));
         }
 
         JsonObject result = new JsonObject();
         result.add("tools", tools);
         return result;
+    }
+
+    /** Project an engine description into the semantics visible to an MCP caller. */
+    static String descriptionForMcp(NumenTool tool) {
+        String description = tool.description();
+        if (!EXTERNAL_ASYNC_TOOLS.contains(tool.name())) return description;
+        return EXTERNAL_ASYNC_GUIDANCE + "\n\nEngine details (built-in brain wording; not the MCP contract):\n"
+                + sanitizeEngineDescription(description);
+    }
+
+    /**
+     * Keep internal-agent lifecycle vocabulary from looking like MCP protocol
+     * fields. This only runs while projecting tools/list; the engine's original
+     * description remains unchanged for the built-in brain.
+     */
+    private static String sanitizeEngineDescription(String description) {
+        return description
+                .replace("task_finished", "the built-in brain completion event")
+                .replace("status=done", "the built-in brain done status")
+                .replace("do not poll", "the built-in brain no-poll rule")
+                .replace("<current_task>", "the built-in brain current-task marker");
     }
 
     private JsonObject toolDef(String name, String description, JsonObject inputSchema) {
