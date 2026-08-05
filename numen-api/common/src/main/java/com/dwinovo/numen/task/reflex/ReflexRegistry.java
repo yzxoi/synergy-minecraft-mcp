@@ -96,10 +96,11 @@ public final class ReflexRegistry {
             }
         }
         if (lines.isEmpty()) return "";
-        return "你的身体有这些本能,会自动发生,不需要用工具去做:"
+        return "Your body has these instincts — they happen automatically, no tool needed: "
                 + String.join(";", lines)
-                + "。你的显式动作永远优先——用 equip_item 显式穿戴会钉住那个槽位,本能不再更换它;"
-                + "equip_item 的 item_id 传 \"auto\" 可解除钉,交还本能管理。";
+                + ". Your explicit actions always win: equipping an item with equip_item pins that "
+                + "slot and instincts stop swapping it; equip_item with item_id \"auto\" unpins and "
+                + "returns the slot to instinct control.";
     }
 
     /** Test hook: wipe the roster, switches and store binding. */

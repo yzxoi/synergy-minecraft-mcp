@@ -138,7 +138,7 @@ public final class MobDefenseChain implements TaskChain, com.dwinovo.numen.task.
 
     @Override
     public String describe() {
-        return "被怪物攻击会反击,受伤太重或没武器就先逃开";
+        return "fights back when attacked by monsters; flees if too injured or unarmed";
     }
 
     // ---- fight ----

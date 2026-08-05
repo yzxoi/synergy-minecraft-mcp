@@ -4,7 +4,9 @@ import com.dwinovo.numen.entity.InputDriver;
 
 import com.dwinovo.numen.core.pathing.exec.PlayerNav;
 import com.dwinovo.numen.task.CompanionTask;
+import com.dwinovo.numen.core.task.FailureGuidance;
 import com.dwinovo.numen.core.task.FailureType;
+import com.dwinovo.numen.task.ErrorCode;
 import com.dwinovo.numen.task.Suspendable;
 import com.dwinovo.numen.task.TaskRecord;
 import com.dwinovo.numen.task.TaskState;
@@ -195,12 +197,30 @@ public abstract class AbstractCompanionTask<R extends TaskRecord>
             data.put("failure_code", "interrupted");
             data.put("recoverable_by_replan", true);
         }
-        return switch (finalState) {
+        TaskResult result = switch (finalState) {
             case SUCCESS   -> TaskResult.ok(successMessage(), data);
             case TIMEOUT   -> new TaskResult(false, timeoutMessage(), true, false, data);
             case CANCELLED -> new TaskResult(false, cancelledMessage(), false, true, data);
             default        -> TaskResult.fail(doneReason, data);   // FAILED and any stray state
         };
+        // Observability extension: machine-readable error domain + model-facing
+        // next steps on failures, and the body situation on every result, so an
+        // external brain never has to guess why it failed or where the body is.
+        if (finalState == TaskState.FAILED) {
+            FailureGuidance.Guidance g = FailureGuidance.forType(failType);
+            result = result.withObservability(g.errorCode().code(), g.retryable(),
+                    g.nextSteps(), null);
+        } else if (finalState == TaskState.TIMEOUT) {
+            FailureGuidance.Guidance g = FailureGuidance.forType(FailureType.TIMED_OUT);
+            result = result.withObservability(ErrorCode.TIMEOUT.code(), true,
+                    g.nextSteps(), null);
+        } else if (finalState == TaskState.CANCELLED) {
+            FailureGuidance.Guidance g = FailureGuidance.forType(FailureType.INTERRUPTED);
+            result = result.withObservability(ErrorCode.CANCELLED.code(), false,
+                    g.nextSteps(), null);
+        }
+        return result.withObservability(null, null, null,
+                com.dwinovo.numen.task.BodySituation.capture(player));
     }
 
     /**

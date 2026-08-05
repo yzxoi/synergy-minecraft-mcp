@@ -58,9 +58,22 @@ pwsh -File .\scripts\Invoke-NumenIntegrationCheck.ps1 `
 - task 状态序列（pending/running/succeeded/failed/cancelled）；
 - 当前 chain 名称与 priority；
 - tick counter、最近位置 delta、输入/导航状态；
+- 失败任务的 `result.code` / `result.retryable` / `result.next_steps`（机器可读错误域与下一步建议）；
+- 终态快照的 `situation` 块（in_water / eye_underwater / air / on_ground / hp / hunger / in_lava / locomotion / active_reflex）；
 - API/core SHA-256 与启动日志中的 revision。
 
 如果实体 tick 抛异常，日志必须包含一次限频的异常摘要和实体身份；不能只留下“身体空闲”。
+
+## 3.1 可观测性新契约验收
+
+升级后的外接 MCP 契约，至少验证以下各点：
+
+1. `task_status(wait_seconds=N)` 阻塞等待：任务在 N 秒内终态则直接返回终态；超时返回快照并带 `timed_out_waiting: true`，同一 `task_id` 可续等；
+2. `task_status` 快照顶层有 `situation`（终态还有 `result.situation`），水中/低氧等处境无需额外调 `get_self_status` 就能看到；
+3. 失败结果带 `code` + `retryable` + `next_steps`（例如 `goto` 不可达 → `world_state` + 可执行建议），网络/超时错误与游戏世界错误分域；
+4. `get_events(companion, since_id)` 返回增量事件流：`entered_water` / `air_low` / `damaged` / `fell` / `respawned` / `task_finished` / `body_log` / `dimension_change`，`next_id` 可续读；
+5. 工具结果带 `structuredContent`（机器可读 JSON）与 `content[0].text`（英文可读文本）；查询类工具带 `readOnlyHint`/`idempotentHint`，`delete_companion` 带 `destructiveHint`；
+6. 落水场景端到端：把同伴放进水里，`get_events` 出现 `entered_water`，`task_status` 快照 `situation.in_water=true`，模型一个调用周期内可反应。
 
 ## 4. 生存行为抢占回归
 

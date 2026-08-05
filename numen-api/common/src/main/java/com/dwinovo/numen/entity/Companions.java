@@ -126,7 +126,7 @@ public final class Companions {
         if (server == null) return;
         UUID uuid = body.getUUID();
         String cause = body.getCombatTracker().getDeathMessage().getString();
-        if (cause == null || cause.isBlank()) cause = "未知原因";
+        if (cause == null || cause.isBlank()) cause = "unknown cause";
         CompanionLifecycle.fireDeath(body);   // no result shipped — the death payload drives the client
         ServerPlayer owner = body.resolveOwnerPlayer();
         if (owner != null) {   // immediate, same-session (carries the respawn delay for the client countdown)
@@ -178,6 +178,12 @@ public final class Companions {
         CompanionRegistry.get(server).markAlive(uuid);
         syncRosterToOwner(server, owner);
         Services.NETWORK.sendToPlayer(owner, new NumenRespawnPayload(uuid, entry.deathCause()));
+        // Tell the external event channel the body is back (the situation tracker
+        // cannot see the respawn edge — the body object is brand new here).
+        com.dwinovo.numen.event.GameEvents.emit(body,
+                com.dwinovo.numen.event.GameEvents.Kind.RESPAWNED,
+                java.util.Map.of("cause", entry.deathCause() == null ? "" : entry.deathCause()),
+                "You respawned at your owner.");
         return true;
     }
 
@@ -228,7 +234,7 @@ public final class Companions {
         com.dwinovo.numen.event.GameEvents.emit(body,
                 com.dwinovo.numen.event.GameEvents.Kind.DIMENSION_CHANGE,
                 java.util.Map.of("to", dim),
-                "你进入了 " + dim + "。留意这个维度的环境和危险。");
+                "You entered " + dim + ". Mind the environment and hazards of this dimension.");
     }
 
     /** Save the companion to its {@code .dat} and remove it from the world (dormancy). */

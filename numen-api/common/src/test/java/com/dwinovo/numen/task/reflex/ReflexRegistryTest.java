@@ -81,11 +81,11 @@ class ReflexRegistryTest {
         ReflexRegistry.register(new PolicyReflex("mlg", "会用水桶自救高坠"));
         ReflexRegistry.register(new PolicyReflex("armor", "会自动穿上更好的盔甲"));
         String overview = ReflexRegistry.overview();
-        assertTrue(overview.startsWith("你的身体有这些本能"));
+        assertTrue(overview.startsWith("Your body has these instincts"));
         int mlg = overview.indexOf("会用水桶自救高坠");
         int armor = overview.indexOf("会自动穿上更好的盔甲");
         assertTrue(mlg >= 0 && armor > mlg);
-        assertTrue(overview.contains("你的显式动作永远优先"));
+        assertTrue(overview.contains("Your explicit actions always win"));
     }
 
     @Test

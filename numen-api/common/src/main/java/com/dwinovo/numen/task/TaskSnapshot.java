@@ -57,6 +57,11 @@ public record TaskSnapshot(String taskId,
         }
         if (result != null) {
             out.put("result", result.toData());
+            // Lift a situation snapshot (when the result carries one) to the snapshot
+            // top level so task_status consumers see it without digging into result.
+            if (!result.situation().isEmpty()) {
+                out.put("situation", result.situation());
+            }
         }
         return out;
     }

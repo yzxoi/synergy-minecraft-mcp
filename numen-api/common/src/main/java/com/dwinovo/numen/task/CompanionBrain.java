@@ -59,6 +59,10 @@ final class CompanionBrain {
     private final com.dwinovo.numen.task.HandPinRelease handPinRelease =
             new com.dwinovo.numen.task.HandPinRelease(HAND_PIN_GRACE_TICKS);
 
+    /** Body situation-change detector feeding the external event channel. */
+    private final com.dwinovo.numen.event.SituationTracker situationTracker =
+            new com.dwinovo.numen.event.SituationTracker();
+
     CompanionBrain() {
         this.bodyLog = new BodyLog(this::tryEmitEvent);
         this.llm = new LlmTaskChain(queue);
@@ -79,11 +83,17 @@ final class CompanionBrain {
         NumenPlayer companion = body;
         if (companion == null || companion.resolveOwnerPlayer() == null) return false;
         com.dwinovo.numen.entity.Companions.emitEvent(companion, xml, false);
+        // Mirror body narrative into the external event channel (get_events tool).
+        if (xml != null && xml.contains("kind=\"body_log\"")) {
+            com.dwinovo.numen.event.EventChannels.append(companion, "body_log",
+                    java.util.Map.of("text", xml));
+        }
         return true;
     }
 
     void tick(NumenPlayer companion) {
         body = companion;
+        situationTracker.tick(companion);
 
         // 任务结束边沿 (constitution §5): the LLM chain has stayed workless past the
         // grace window — the explicit-hold session is over, the hand goes back to

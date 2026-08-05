@@ -73,10 +73,18 @@ final class McpAccessPrompt {
                 - Every tool takes a `companion` argument (name or id), so each call targets one body. \
                 There is no take-control handshake — just call tools.
                 - Action tools (`goto`, `mine`, `build`, `fish`, …) are BACKGROUND tasks: they \
-                return a task id immediately. Save it and poll `task_status` until `data.terminal=true`, \
+                return a task id immediately. Save it and poll `task_status` until `data.terminal=true` \
+                (pass `wait_seconds` up to 60 to block-wait instead of hammering the endpoint — a \
+                timed-out wait returns `timed_out_waiting: true` and the same `task_id` resumes it), \
                 then inspect `data.state` and `data.result` and verify with perception. As an external \
                 driver you do NOT receive `task_finished` events, so polling is the only way to know \
                 the outcome. `task_stop` cancels.
+                - Every result also carries a `situation` block (in_water / air / on_ground / hp / \
+                hunger / in_lava / locomotion / active_reflex …) — read it on every poll so you notice \
+                the body fell in water or is running out of air before you keep issuing `goto`.
+                - `get_events` gives an incremental event stream (entered_water, air_low, damaged, \
+                fell, respawned, task_finished, body_log …) — call it with the last `next_id` to catch \
+                what happened while you were thinking.
                 - One body runs one task at a time. If you get a "body is busy" refusal, either wait for \
                 that task or `task_stop` it.
                 - You're blind between calls: perceive with `get_self_status` / `scan_blocks` / \

@@ -237,6 +237,6 @@ public final class BreathChain implements TaskChain, com.dwinovo.numen.task.refl
 
     @Override
     public String describe() {
-        return "在水里快憋不住气时会自己浮上来换气,头顶被冰面/岩层封住时会游向最近的透气口";
+        return "automatically surfaces for air when running out of breath underwater; swims to the nearest opening if trapped under ice or rock";
     }
 }

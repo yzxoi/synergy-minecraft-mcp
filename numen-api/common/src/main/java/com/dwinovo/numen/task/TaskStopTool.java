@@ -41,20 +41,20 @@ public final class TaskStopTool implements NumenTool {
         Args a = GSON.fromJson(args, Args.class);
         TaskRecord active = CompanionTickDispatcher.asyncTaskFor(companion.getUUID());
         if (active == null) {
-            reply.accept(TaskResult.fail("没有进行中的后台任务,不需要叫停。").toJson());
+            reply.accept(TaskResult.fail("No background task is running — nothing to stop.").toJson());
             return;
         }
         if (a != null && a.task_id() != null && !a.task_id().isBlank()
                 && !a.task_id().equals(active.publicId())) {
-            reply.accept(TaskResult.fail("id 不符:当前在跑的是 " + active.publicId()
-                    + "(" + active.describe() + "),没有 " + a.task_id() + "。").toJson());
+            reply.accept(TaskResult.fail("id mismatch: the running task is " + active.publicId()
+                    + " (" + active.describe() + "), not " + a.task_id() + ".").toJson());
             return;
         }
         CompanionTickDispatcher.stopActive(companion, "stopped by task_stop");
         String completion = active.isExternalCall()
-                ? "。用 task_status(task_id) 读取保留的 cancelled 终态。"
-                : "。收尾结果会以 task_finished(status=stopped) 事件送达。";
-        reply.accept(TaskResult.ok("已叫停 " + active.publicId() + "(" + active.describe()
+                ? ". Read the retained cancelled terminal state with task_status(task_id)."
+                : ". The wind-down result is delivered as a task_finished(status=stopped) event.";
+        reply.accept(TaskResult.ok("Stopped " + active.publicId() + " (" + active.describe()
                 + ")" + completion,
                 Map.of("task_id", active.publicId())).toJson());
     }

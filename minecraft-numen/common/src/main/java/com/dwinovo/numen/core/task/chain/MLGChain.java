@@ -130,7 +130,7 @@ public final class MLGChain implements TaskChain, com.dwinovo.numen.task.reflex.
 
     @Override
     public String describe() {
-        return "高处坠落时会用水桶或软方块自救";
+        return "uses a water bucket or soft block to break a fall from heights";
     }
 
     /** Distance from the feet to the first solid block below, or a large number if none within probe. */

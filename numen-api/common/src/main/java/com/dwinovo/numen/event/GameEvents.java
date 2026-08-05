@@ -26,7 +26,21 @@ public final class GameEvents {
         /** 身体自理日记(BodyLog 出口)。 */
         BODY_LOG("body_log"),
         /** 同伴自己跨了维度。 */
-        DIMENSION_CHANGE("dimension_change");
+        DIMENSION_CHANGE("dimension_change"),
+        /** 身体进入水中。 */
+        ENTERED_WATER("entered_water"),
+        /** 身体离开水。 */
+        LEFT_WATER("left_water"),
+        /** 氧气告急(≤90 tick)。 */
+        AIR_LOW("air_low"),
+        /** 受到伤害(HP 下降 ≥1 心)。 */
+        DAMAGED("damaged"),
+        /** 导航停滞(长时间无实质进展)。 */
+        NAV_STALLED("nav_stalled"),
+        /** 坠落 ≥3 格。 */
+        FELL("fell"),
+        /** 复活。 */
+        RESPAWNED("respawned");
 
         private final String kind;
 
@@ -49,6 +63,11 @@ public final class GameEvents {
         }
         sb.append('>').append(escape(text)).append("</event>");
         Companions.emitEvent(body, sb.toString(), false);
+        // Mirror into the external-brain event channel (get_events MCP tool).
+        java.util.LinkedHashMap<String, Object> data = new java.util.LinkedHashMap<>();
+        data.put("text", text);
+        if (attrs != null) data.putAll(attrs);
+        EventChannels.append(body, kind.kind, data);
     }
 
     /** 异步任务收尾事件。{@code status} ∈ done / failed / timeout / stopped。 */

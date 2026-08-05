@@ -28,6 +28,10 @@ public final class TaskStatusTool implements NumenTool {
         return Schema.object()
                 .optionalString("task_id", "Optional task id returned when the action was accepted, e.g. t42. "
                         + "Use it to retrieve the exact terminal result after the body becomes idle.")
+                .optionalInteger("wait_seconds", "Optional blocking wait: poll this task on the caller side "
+                        + "until it reaches a terminal state or the budget elapses (0–60, default 0 = single "
+                        + "snapshot). When the wait times out the snapshot carries timed_out_waiting=true and "
+                        + "you may call again with the same task_id to continue waiting.", 0, 60)
                 .build();
     }
 
@@ -51,8 +55,8 @@ public final class TaskStatusTool implements NumenTool {
         if (rec == null) {
             String normalized = requested == null ? "" : requested;
             String message = normalized.isEmpty()
-                    ? "身体空闲,没有后台任务。"
-                    : "没有找到任务 " + normalized + "；它可能不存在或已超出最近任务保留窗口。";
+                    ? "The body is idle — no background task is running."
+                    : "No task " + normalized + " found; it may not exist or has left the recent-task retention window.";
             return TaskResult.ok(message, Map.of(
                     "state", normalized.isEmpty() ? "idle" : "unknown",
                     "task_id", normalized)).toJson();

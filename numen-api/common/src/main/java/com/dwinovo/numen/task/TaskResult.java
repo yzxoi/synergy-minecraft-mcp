@@ -2,7 +2,9 @@ package com.dwinovo.numen.task;
 
 import com.google.gson.Gson;
 
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -22,6 +24,14 @@ import java.util.Map;
  * {@code data.step_results} with the per-step result list, so a failed chain
  * can be traced step-by-step by the LLM.
  *
+ * <h2>Observability extension (external contract)</h2>
+ * The optional {@code code / retryable / next_steps / situation} fields give
+ * an external (MCP) driver a machine-readable error domain plus the body's
+ * current situation snapshot, without disturbing the legacy five-field shape:
+ * they only appear in {@link #toData()} when non-null, so older consumers
+ * (the built-in brain, client-side result harvesters) keep working byte-for-
+ * byte.
+ *
  * @param success      did the task achieve its goal? Distinct from
  *                     {@code !timedOut && !interrupted}: a moveTo can succeed,
  *                     fail (unreachable), time out, or get cancelled.
@@ -32,13 +42,80 @@ import java.util.Map;
  * @param interrupted  whether the work was cancelled (e.g. owner interrupt).
  * @param data         task-specific structured payload. Empty map for no extras.
  */
-public record TaskResult(boolean success,
-                         String message,
-                         boolean timedOut,
-                         boolean interrupted,
-                         Map<String, Object> data) {
+public class TaskResult {
 
     private static final Gson GSON = new Gson();
+
+    private final boolean success;
+    private final String message;
+    private final boolean timedOut;
+    private final boolean interrupted;
+    private final Map<String, Object> data;
+    private final String code;
+    private final Boolean retryable;
+    private final List<String> nextSteps;
+    private final Map<String, Object> situation;
+
+    /** Legacy five-field constructor — extension fields default to absent. */
+    public TaskResult(boolean success, String message, boolean timedOut, boolean interrupted,
+                      Map<String, Object> data) {
+        this(success, message, timedOut, interrupted, data, null, null, null, null);
+    }
+
+    /** Full constructor. {@code null} extension fields are omitted from serialisation. */
+    public TaskResult(boolean success, String message, boolean timedOut, boolean interrupted,
+                      Map<String, Object> data, String code, Boolean retryable,
+                      List<String> nextSteps, Map<String, Object> situation) {
+        this.success = success;
+        this.message = message == null ? "" : message;
+        this.timedOut = timedOut;
+        this.interrupted = interrupted;
+        this.data = data == null ? Map.of() : data;
+        this.code = code;
+        this.retryable = retryable;
+        this.nextSteps = nextSteps == null || nextSteps.isEmpty() ? List.of() : List.copyOf(nextSteps);
+        this.situation = situation == null || situation.isEmpty() ? Map.of() : situation;
+    }
+
+    public boolean success() {
+        return success;
+    }
+
+    public String message() {
+        return message;
+    }
+
+    public boolean timedOut() {
+        return timedOut;
+    }
+
+    public boolean interrupted() {
+        return interrupted;
+    }
+
+    public Map<String, Object> data() {
+        return data;
+    }
+
+    /** Machine-readable error code (see {@link ErrorCode}); null on success or unclassified results. */
+    public String code() {
+        return code;
+    }
+
+    /** Whether retrying the same call as-is is permitted; null when unspecified. */
+    public Boolean retryable() {
+        return retryable;
+    }
+
+    /** Suggested next actions for the model; empty when unspecified. */
+    public List<String> nextSteps() {
+        return nextSteps;
+    }
+
+    /** Body situation snapshot at result time (see {@code BodySituation}); empty when unavailable. */
+    public Map<String, Object> situation() {
+        return situation;
+    }
 
     public static TaskResult ok(String message, Map<String, Object> data) {
         return new TaskResult(true, message, false, false, data);
@@ -71,6 +148,20 @@ public record TaskResult(boolean success,
     }
 
     /**
+     * A copy of this result with the observability extension fields applied.
+     * Legacy fields (success/message/timedOut/interrupted/data) are preserved
+     * verbatim; {@code null} extension values leave the previous ones in place.
+     */
+    public TaskResult withObservability(String code, Boolean retryable,
+                                        List<String> nextSteps, Map<String, Object> situation) {
+        return new TaskResult(success, message, timedOut, interrupted, data,
+                code != null ? code : this.code,
+                retryable != null ? retryable : this.retryable,
+                nextSteps != null && !nextSteps.isEmpty() ? nextSteps : this.nextSteps,
+                situation != null && !situation.isEmpty() ? situation : this.situation);
+    }
+
+    /**
      * Render this result as the JSON string consumed by the LLM. The shape
      * mirrors the field names exactly so a model trained on common
      * tool-result conventions can read it without a custom system prompt.
@@ -83,10 +174,20 @@ public record TaskResult(boolean success,
     public Map<String, Object> toData() {
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("success", success);
-        out.put("message", message == null ? "" : message);
+        out.put("message", message);
         if (timedOut) out.put("timed_out", true);
         if (interrupted) out.put("interrupted", true);
         if (data != null && !data.isEmpty()) out.put("data", data);
+        if (code != null) out.put("code", code);
+        if (retryable != null) out.put("retryable", retryable);
+        if (!nextSteps.isEmpty()) out.put("next_steps", new ArrayList<>(nextSteps));
+        if (!situation.isEmpty()) out.put("situation", situation);
         return out;
+    }
+
+    @Override
+    public String toString() {
+        return "TaskResult{success=" + success + ", message=" + message
+                + ", code=" + code + "}";
     }
 }
