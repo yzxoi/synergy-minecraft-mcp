@@ -533,8 +533,17 @@ public final class McpServer {
 
         for (NumenTool tool : ToolRegistry.all()) {
             if (config.isHidden(tool.name())) continue;
-            tools.add(toolDef(tool.name(), descriptionForMcp(tool),
-                    withCompanion(tool.parameterSchema()), annotationsFor(tool.name())));
+            String toolName = tool.name();
+            if ("task_status".equals(toolName)) {
+                // task_status additionally advertises the unified result shape as its
+                // output schema (MCP 2025-06-18) so clients can validate structuredContent.
+                tools.add(toolDef(toolName, descriptionForMcp(tool),
+                        withCompanion(tool.parameterSchema()), annotationsFor(toolName),
+                        taskResultOutputSchema()));
+                continue;
+            }
+            tools.add(toolDef(toolName, descriptionForMcp(tool),
+                    withCompanion(tool.parameterSchema()), annotationsFor(toolName)));
         }
 
         JsonObject result = new JsonObject();
@@ -741,7 +750,11 @@ public final class McpServer {
     private JsonObject dispatchToolCall(String name, JsonObject args) {
         try {
             return switch (name) {
-                case "list_companions" -> content(listCompanions(), false);
+                case "list_companions" -> {
+                    JsonObject structured = listCompanions();
+                    yield contentWithStructure(structured.get("message").getAsString(),
+                            structured.toString(), false);
+                }
                 case "create_companion" -> handleCreate(args);
                 case "delete_companion" -> handleDelete(args);
                 case "get_events" -> handleGetEvents(args);
@@ -850,17 +863,28 @@ public final class McpServer {
         return s.length() <= limit ? s : s.substring(0, limit) + "…";
     }
 
-    private String listCompanions() throws Exception {
+    private JsonObject listCompanions() throws Exception {
         List<NumenActuator.Companion> list = NumenActuator.companions()
                 .get(CONTROL_TIMEOUT_SECONDS, TimeUnit.SECONDS);
+        JsonObject structured = new JsonObject();
+        structured.addProperty("success", true);
+        JsonArray companions = new JsonArray();
         if (list.isEmpty()) {
-            return "No companions are live in the world right now. Summon one in-game first.";
+            structured.addProperty("message",
+                    "No companions are live in the world right now. Summon one in-game first.");
+        } else {
+            StringBuilder sb = new StringBuilder("Live companions:\n");
+            for (NumenActuator.Companion c : list) {
+                sb.append("- ").append(c.name()).append("  (id: ").append(c.uuid()).append(")\n");
+                JsonObject entry = new JsonObject();
+                entry.addProperty("name", c.name());
+                entry.addProperty("uuid", c.uuid().toString());
+                companions.add(entry);
+            }
+            structured.addProperty("message", sb.toString().stripTrailing());
         }
-        StringBuilder sb = new StringBuilder("Live companions:\n");
-        for (NumenActuator.Companion c : list) {
-            sb.append("- ").append(c.name()).append("  (id: ").append(c.uuid()).append(")\n");
-        }
-        return sb.toString().stripTrailing();
+        structured.add("companions", companions);
+        return structured;
     }
 
     private JsonObject handleCreate(JsonObject args) throws Exception {
@@ -945,23 +969,50 @@ public final class McpServer {
             }
         }
 
-        long deadline = System.nanoTime() + waitSeconds * 1_000_000_000L;
-        String result;
+        String result = waitForTerminal(() -> {
+            try {
+                return NumenActuator.invoke(target, toolName, toolArgs.toString())
+                        .get(config.callTimeoutSeconds(), TimeUnit.SECONDS);
+            } catch (Exception e) {
+                throw new RuntimeException(e);
+            }
+        }, waitSeconds);
         boolean isError = false;
+        try {
+            JsonObject r = JsonParser.parseString(result).getAsJsonObject();
+            isError = r.has("success") && !r.get("success").getAsBoolean();
+        } catch (RuntimeException ignored) {
+            // non-JSON result — treat as plain text, not an error
+        }
+        return contentWithStructure(result, result, isError);
+    }
+
+    /**
+     * Poll a task-status snapshot supplier until the snapshot reports a terminal
+     * state or the wait budget elapses. Pure logic (no Minecraft objects) so the
+     * three wait semantics are headless-testable:
+     * <ul>
+     *   <li>{@code waitSeconds <= 0} — single snapshot, never blocks;</li>
+     *   <li>terminal snapshot — returns immediately regardless of the budget;</li>
+     *   <li>non-terminal after the budget — returns the latest snapshot with
+     *       {@code timed_out_waiting: true} attached.</li>
+     * </ul>
+     */
+    static String waitForTerminal(java.util.function.Supplier<String> snapshotSupplier,
+                                  int waitSeconds) {
+        long deadline = System.nanoTime() + (long) Math.max(0, waitSeconds) * 1_000_000_000L;
+        String result = "";
+        boolean terminal;
         while (true) {
-            result = NumenActuator.invoke(target, toolName, toolArgs.toString())
-                    .get(config.callTimeoutSeconds(), TimeUnit.SECONDS);
-            isError = false;
-            boolean terminal = false;
-            boolean timedOutWaiting = false;
+            result = snapshotSupplier.get();
+            terminal = false;
             try {
                 JsonObject r = JsonParser.parseString(result).getAsJsonObject();
-                isError = r.has("success") && !r.get("success").getAsBoolean();
                 if (r.has("data") && r.getAsJsonObject("data").has("terminal")) {
                     terminal = r.getAsJsonObject("data").get("terminal").getAsBoolean();
                 }
             } catch (RuntimeException ignored) {
-                // non-JSON result — treat as plain text, not an error
+                // non-JSON result — treat as plain text, never terminal
             }
             if (terminal || waitSeconds <= 0 || System.nanoTime() >= deadline) {
                 if (waitSeconds > 0 && !terminal && System.nanoTime() >= deadline) {
@@ -974,16 +1025,15 @@ public final class McpServer {
                         // keep the raw result
                     }
                 }
-                break;
+                return result;
             }
             try {
                 Thread.sleep(100);
             } catch (InterruptedException ie) {
                 Thread.currentThread().interrupt();
-                break;
+                return result;
             }
         }
-        return contentWithStructure(result, result, isError);
     }
 
     /** Resolve a retained terminal receipt after the body has temporarily despawned on death. */

@@ -80,6 +80,9 @@ public final class MoveToCompanionTask extends AbstractCompanionTask<MoveToTaskR
     private double leaseLastZ;
     private double leaseLastDistance = Double.MAX_VALUE;
     private int leaseNoProgressTicks;
+    /** Edge latch for the NAV_STALLED event: emitted once per stall episode,
+     *  reset when progress resumes. */
+    private boolean navStalledEmitted;
 
     // ==================== FIND(就近方块)状态 ====================
     /** 候选上限、扫描同层判据/最远环半径、离线扫描的放弃时限、行程预算基准。 */
@@ -325,6 +328,20 @@ public final class MoveToCompanionTask extends AbstractCompanionTask<MoveToTaskR
         live.put("x", player.getX());
         live.put("y", player.getY());
         live.put("z", player.getZ());
+        // Emit a NAV_STALLED event once per stall episode (edge-triggered, not
+        // every tick): the external event channel's consumers get one semantic
+        // "navigation is stuck" signal per episode, and progress resets the latch.
+        boolean stalledNow = nav.stallTicks() > PROGRESS_GRACE_TICKS;
+        if (stalledNow && !navStalledEmitted) {
+            navStalledEmitted = true;
+            com.dwinovo.numen.event.GameEvents.emit(player,
+                    com.dwinovo.numen.event.GameEvents.Kind.NAV_STALLED,
+                    java.util.Map.of("stall_ticks", String.valueOf(nav.stallTicks()),
+                            "remaining_blocks", String.format("%.1f", d)),
+                    "Navigation stalled for " + nav.stallTicks() + " ticks; the body is stuck or pathfinding is failing.");
+        } else if (!stalledNow) {
+            navStalledEmitted = false;
+        }
         if (advanced) {
             reportProgress("navigating", "moving toward the goal", live);
         } else {
