@@ -2,7 +2,9 @@ package com.dwinovo.numen.event;
 
 import com.dwinovo.numen.entity.NumenPlayer;
 
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 
 /**
@@ -14,6 +16,11 @@ import java.util.Map;
  * (default 40 ticks = 2 s), so drowning air ticks or repeated small falls do not
  * storm the channel. The detector is a pure per-companion state holder; the
  * {@code CompanionBrain} calls {@link #tick(NumenPlayer)} every server tick.
+ *
+ * <p>Falls are measured from the {@code y} at the moment the body leaves the
+ * ground, not from the previous tick's {@code y} — gravity moves a body only a
+ * fraction of a block per tick, so comparing against the last tick could never
+ * accumulate a 3-block fall.
  *
  * <p>RESPAWNED is not detected here — the lifecycle wiring fires it directly via
  * {@link GameEvents} when a dead body respawns (see {@code Companions.respawnDead}).
@@ -29,11 +36,15 @@ public final class SituationTracker {
     /** HP loss (half-hearts) at or above which a DAMAGED event fires. */
     public static final double DAMAGE_EVENT_THRESHOLD = 2.0;
 
+    /** One detected situation change, before debounce. */
+    record Event(GameEvents.Kind kind, Map<String, Object> data) {}
+
     private boolean wasInWater;
     private boolean wasAirLow;
     private double lastHp = Double.NaN;
-    private double lastY;
     private boolean lastOnGround;
+    /** Y at the moment the body left the ground; NaN while grounded or after an event fired. */
+    private double fallStartY = Double.NaN;
     private long lastKindTick = Long.MIN_VALUE;
     private String lastKind;
 
@@ -43,37 +54,56 @@ public final class SituationTracker {
      */
     public void tick(NumenPlayer body) {
         long now = body.level().getGameTime();
-        boolean inWater = body.isInWater();
-        boolean airLow = body.getAirSupply() <= com.dwinovo.numen.task.BodySituation.AIR_LOW_TICKS;
-        double hp = body.getHealth();
-        double y = body.getY();
-        boolean onGround = body.onGround();
+        for (Event ev : observe(now, body.isInWater(),
+                body.getAirSupply() <= com.dwinovo.numen.task.BodySituation.AIR_LOW_TICKS,
+                body.getHealth(), body.getY(), body.onGround(), body.getAirSupply())) {
+            fire(body, now, ev.kind(), ev.data());
+        }
+    }
+
+    /**
+     * Pure detection pass over raw observations — no Minecraft objects, so the
+     * edge detection (water/air/hp/fall) is headless-testable. Returns the
+     * events detected on this pass, oldest first; the caller applies debounce
+     * and delivery. State (previous tick's situation, fall start) is advanced
+     * regardless of whether an event fires.
+     */
+    List<Event> observe(long now, boolean inWater, boolean airLow, double hp,
+                        double y, boolean onGround, int air) {
+        List<Event> out = new ArrayList<>();
 
         if (inWater && !wasInWater) {
-            fire(body, now, GameEvents.Kind.ENTERED_WATER, Map.of());
+            out.add(new Event(GameEvents.Kind.ENTERED_WATER, Map.of()));
         } else if (!inWater && wasInWater) {
-            fire(body, now, GameEvents.Kind.LEFT_WATER, Map.of());
+            out.add(new Event(GameEvents.Kind.LEFT_WATER, Map.of()));
         }
 
         if (airLow && !wasAirLow) {
-            fire(body, now, GameEvents.Kind.AIR_LOW, Map.of("air", body.getAirSupply()));
+            out.add(new Event(GameEvents.Kind.AIR_LOW, Map.of("air", air)));
         }
 
         if (!Double.isNaN(lastHp) && hp < lastHp - DAMAGE_EVENT_THRESHOLD) {
-            fire(body, now, GameEvents.Kind.DAMAGED, Map.of(
-                    "from_hp", lastHp, "to_hp", hp));
+            out.add(new Event(GameEvents.Kind.DAMAGED, Map.of(
+                    "from_hp", lastHp, "to_hp", hp)));
         }
 
-        if (lastOnGround && !onGround && y < lastY - FALL_EVENT_THRESHOLD) {
-            fire(body, now, GameEvents.Kind.FELL, Map.of(
-                    "fell_blocks", Math.round((lastY - y) * 10) / 10.0));
+        if (!onGround) {
+            if (lastOnGround) {
+                fallStartY = y;   // just left the ground — start measuring the fall
+            } else if (!Double.isNaN(fallStartY) && y < fallStartY - FALL_EVENT_THRESHOLD) {
+                out.add(new Event(GameEvents.Kind.FELL, Map.of(
+                        "fell_blocks", Math.round((fallStartY - y) * 10) / 10.0)));
+                fallStartY = Double.NaN;   // one event per fall episode
+            }
+        } else {
+            fallStartY = Double.NaN;   // landed — a fresh fall can start later
         }
 
         wasInWater = inWater;
         wasAirLow = airLow;
         lastHp = hp;
-        lastY = y;
         lastOnGround = onGround;
+        return out;
     }
 
     private void fire(NumenPlayer body, long now, GameEvents.Kind kind, Map<String, Object> data) {

@@ -190,4 +190,32 @@ public class TaskResult {
         return "TaskResult{success=" + success + ", message=" + message
                 + ", code=" + code + "}";
     }
+
+    /**
+     * Value semantics preserved from the legacy record shape: two results are
+     * equal when their five core fields match. The observability extension
+     * fields (code / retryable / next_steps / situation) are advisory and do
+     * not affect equality, so a copy made with {@link #withObservability}
+     * still equals its source — matching the pre-refactor record contract.
+     */
+    @Override
+    public boolean equals(Object o) {
+        if (this == o) return true;
+        if (!(o instanceof TaskResult other)) return false;
+        return success == other.success
+                && timedOut == other.timedOut
+                && interrupted == other.interrupted
+                && message.equals(other.message)
+                && data.equals(other.data);
+    }
+
+    @Override
+    public int hashCode() {
+        int h = Boolean.hashCode(success);
+        h = 31 * h + message.hashCode();
+        h = 31 * h + Boolean.hashCode(timedOut);
+        h = 31 * h + Boolean.hashCode(interrupted);
+        h = 31 * h + data.hashCode();
+        return h;
+    }
 }

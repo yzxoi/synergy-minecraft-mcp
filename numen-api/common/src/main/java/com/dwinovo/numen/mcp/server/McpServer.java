@@ -5,6 +5,8 @@ import com.dwinovo.numen.agent.tool.NumenTool;
 import com.dwinovo.numen.agent.tool.ToolRegistry;
 import com.dwinovo.numen.api.NumenActuator;
 import com.dwinovo.numen.task.TaskTerminalStore;
+import com.dwinovo.numen.event.EventRingBuffer;
+import com.dwinovo.numen.event.EventChannels;
 import com.google.gson.Gson;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
@@ -244,10 +246,10 @@ public final class McpServer {
         }
     }
 
-    private static void writeSseFrame(OutputStream os, JsonElement frame) throws IOException {
+    private void writeSseFrame(OutputStream os, JsonElement frame) throws IOException {
         os.write("event: message\n".getBytes(StandardCharsets.UTF_8));
         os.write("data: ".getBytes(StandardCharsets.UTF_8));
-        os.write(new Gson().toJson(frame).getBytes(StandardCharsets.UTF_8));
+        os.write(gson.toJson(frame).getBytes(StandardCharsets.UTF_8));
         os.write("\n\n".getBytes(StandardCharsets.UTF_8));
     }
 
@@ -761,16 +763,19 @@ public final class McpServer {
                 default -> handleToolInvoke(name, args);
             };
         } catch (TimeoutException te) {
-            // Transport-level timeout: the game state was NOT changed by the timeout
-            // itself. Say so explicitly and give the model the next step.
+            // Transport-level timeout: the action receipt did not come back in
+            // time, so whether the task was actually dispatched is UNKNOWN. Do
+            // not claim the game state was unchanged, and do not invite a blind
+            // retry — that could double-dispatch a task that was accepted.
             JsonObject structured = new JsonObject();
             structured.addProperty("success", false);
-            structured.addProperty("message", "timed out waiting for the action to finish");
+            structured.addProperty("message",
+                    "timed out waiting for the action to be accepted; whether it was dispatched is unknown");
             structured.addProperty("code", "timeout");
-            structured.addProperty("retryable", true);
+            structured.addProperty("retryable", false);
             JsonArray next = new JsonArray();
-            next.add("Call task_status with the same task_id to check whether the work is still running.");
-            next.add("If it is terminal, read its result; if not, either wait (task_status wait_seconds) or stop it (task_stop).");
+            next.add("Call task_status (without task_id) to see whether a task is now running on the companion.");
+            next.add("If one is running, track it to terminal with task_status(task_id); if the body is idle, re-issue the action.");
             structured.add("next_steps", next);
             return contentWithStructure(structured.get("message").getAsString(),
                     structured.toString(), true);
@@ -793,7 +798,9 @@ public final class McpServer {
     private JsonObject handleGetEvents(JsonObject args) throws Exception {
         UUID target = resolveCompanion(args);
         if (target == null) {
-            return content("get_events needs a 'companion' argument (a name or id from list_companions)", true);
+            return structuredError("get_events needs a 'companion' argument (a name or id from list_companions)",
+                    "not_found", false,
+                    List.of("Call list_companions to see valid names/ids, then retry."));
         }
         long sinceId = 0;
         if (args.has("since_id") && !args.get("since_id").isJsonNull()) {
@@ -812,26 +819,46 @@ public final class McpServer {
             }
         }
 
-        com.dwinovo.numen.event.EventRingBuffer ring =
-                com.dwinovo.numen.event.EventChannels.ringOrNull(target);
+        JsonObject out = eventsPage(EventChannels.ringOrNull(target), sinceId, limit);
+        int shown = out.getAsJsonArray("events").size();
+        return contentWithStructure("events: " + shown
+                + (shown == 1 ? " entry" : " entries")
+                + " (next_id=" + out.get("next_id").getAsLong() + ")", out.toString(), false);
+    }
+
+    /**
+     * Project one page of events: at most {@code limit} events with seq &gt;
+     * {@code sinceId}, with {@code next_id} = the seq of the LAST RETURNED
+     * event (not the ring's newest). A subsequent call with
+     * {@code since_id = next_id} therefore resumes exactly after what the
+     * client has seen — no gaps and no duplicates even when more events
+     * arrived than fit in one page ({@code truncated=true}). When nothing is
+     * returned, {@code next_id} falls back to the ring's newest seq so the
+     * client can still resume. Pure JDK (no Minecraft objects) so the
+     * truncation contract is headless-testable.
+     */
+    JsonObject eventsPage(EventRingBuffer ring, long sinceId, int limit) {
         JsonObject out = new JsonObject();
         JsonArray events = new JsonArray();
-        if (ring != null) {
+        long nextId;
+        boolean truncated;
+        if (ring == null) {
+            nextId = 0L;
+            truncated = false;
+        } else {
             java.util.List<Map<String, Object>> all = ring.since(sinceId);
             int shown = Math.min(all.size(), limit);
             for (int i = 0; i < shown; i++) {
                 events.add(gson.toJsonTree(all.get(i)));
             }
-            out.addProperty("next_id", ring.lastSeq());
-            out.addProperty("truncated", all.size() > shown);
-        } else {
-            out.addProperty("next_id", 0L);
-            out.addProperty("truncated", false);
+            nextId = shown == 0 ? ring.lastSeq()
+                    : ((Number) all.get(shown - 1).get("seq")).longValue();
+            truncated = all.size() > shown;
         }
+        out.addProperty("next_id", nextId);
+        out.addProperty("truncated", truncated);
         out.add("events", events);
-        return contentWithStructure("events: " + events.size()
-                + (events.size() == 1 ? " entry" : " entries")
-                + " (next_id=" + out.get("next_id").getAsLong() + ")", out.toString(), false);
+        return out;
     }
 
     /** 参数压成一行 {@code companion=Alice, count=5};过长截断,面板一行放得下。 */
@@ -949,7 +976,16 @@ public final class McpServer {
         if (target == null) {
             if ("task_status".equals(toolName)) {
                 String retained = retainedDeadTaskStatus(args);
-                if (retained != null) return contentWithStructure(retained, retained, false);
+                if (retained != null) {
+                    // Death window: the body is temporarily despawned, so the
+                    // blocking wait cannot run on a live snapshot. Say so
+                    // instead of silently returning instantly after the caller
+                    // asked to wait.
+                    if (requestsWait(args)) {
+                        retained = annotateWaitUnavailable(retained);
+                    }
+                    return contentWithStructure(retained, retained, false);
+                }
             }
             return content("this tool needs a 'companion' argument (a name or id from list_companions)", true);
         }
@@ -1051,6 +1087,27 @@ public final class McpServer {
             }
         } catch (IllegalArgumentException ignored) {
             return null;
+        }
+    }
+
+    /** Whether the caller asked for a blocking wait ({@code wait_seconds > 0}). */
+    private static boolean requestsWait(JsonObject args) {
+        if (!args.has("wait_seconds") || args.get("wait_seconds").isJsonNull()) return false;
+        try {
+            return args.get("wait_seconds").getAsInt() > 0;
+        } catch (RuntimeException ignored) {
+            return false;
+        }
+    }
+
+    /** Mark a retained-status response with {@code wait_not_applied} when the body is unreachable. */
+    private static String annotateWaitUnavailable(String retained) {
+        try {
+            JsonObject r = JsonParser.parseString(retained).getAsJsonObject();
+            r.addProperty("wait_not_applied", true);
+            return r.toString();
+        } catch (RuntimeException ignored) {
+            return retained;
         }
     }
 

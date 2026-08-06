@@ -1,5 +1,6 @@
 package com.dwinovo.numen.entity;
 
+import com.dwinovo.numen.event.EventChannels;
 import com.dwinovo.numen.network.payload.NumenDeathPayload;
 import com.dwinovo.numen.network.payload.NumenEventPayload;
 import com.dwinovo.numen.network.payload.NumenRespawnPayload;
@@ -254,6 +255,11 @@ public final class Companions {
         UUID uuid = body.getUUID();
         CompanionFactory.despawn(server, body);
         CompanionRegistry.get(server).remove(uuid);
+        // Permanent removal: the event ring for this UUID must go too, or the
+        // static map leaks one entry per ever-summoned companion. Death and
+        // dormancy do NOT drop the ring — the same UUID respawns later and the
+        // seq continuity (get_events resume points) must survive.
+        EventChannels.drop(uuid);
     }
 
     /**
@@ -280,6 +286,7 @@ public final class Companions {
             NumenPlayer live = NumenPlayer.findByUuid(server, id);
             if (live != null) CompanionFactory.despawn(server, live);
             reg.remove(id);
+            EventChannels.drop(id);
         }
         return ids.size();
     }
