@@ -3,7 +3,9 @@ name: Build
 on:
   push:
     branches: [main]
+    tags: ['v*']
   pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -15,7 +17,7 @@ concurrency:
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
 
     steps:
       - name: Check out repository
@@ -46,3 +48,60 @@ jobs:
         run: >-
           ./gradlew test :common:javadoc :fabric:build :neoforge:build
           verifyTagResources --stacktrace
+
+      # Every successful build leaves the jars as downloadable artifacts
+      # (Actions UI / API, kept 7 days). Sourced from build/libs so the
+      # fabric jars are the remapped runtime artifacts.
+      - name: Upload Numen API jars (artifact)
+        uses: actions/upload-artifact@v4
+        with:
+          name: numen-api-jars
+          path: |
+            numen-api/fabric/build/libs/*.jar
+            numen-api/neoforge/build/libs/*.jar
+          if-no-files-found: error
+
+      - name: Upload Numen mod jars (artifact)
+        uses: actions/upload-artifact@v4
+        with:
+          name: numen-mod-jars
+          path: |
+            minecraft-numen/fabric/build/libs/*.jar
+            minecraft-numen/neoforge/build/libs/*.jar
+          # dev/sources/javadoc jars are build by-products; the release
+          # assets and the "download the mod" artifact only need runnable jars.
+          if-no-files-found: error
+
+  # On a v* tag the same build output becomes a GitHub Release with the
+  # runnable mod jars (fabric + neoforge) and the API jars attached.
+  release:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download Numen mod jars
+        uses: actions/download-artifact@v4
+        with:
+          name: numen-mod-jars
+          path: dist
+
+      - name: Download Numen API jars
+        uses: actions/download-artifact@v4
+        with:
+          name: numen-api-jars
+          path: dist-api
+
+      - name: Stage release assets
+        run: |
+          mkdir -p release
+          cp dist/*.jar release/
+          cp dist-api/*.jar release/
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: release/*.jar
+          generate_release_notes: true
