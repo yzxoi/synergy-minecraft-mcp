@@ -118,7 +118,7 @@ public final class FoodChain implements TaskChain, com.dwinovo.numen.task.reflex
 
     @Override
     public String describe() {
-        return "饿了或受伤时会自己吃背包里的食物";
+        return "eats food from the backpack when hungry or hurt";
     }
 
     /**

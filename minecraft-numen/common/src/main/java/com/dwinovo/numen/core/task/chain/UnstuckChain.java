@@ -93,7 +93,7 @@ public final class UnstuckChain implements TaskChain, com.dwinovo.numen.task.ref
 
     @Override
     public String describe() {
-        return "被地形卡住时会自己挣脱出来";
+        return "frees itself when stuck in terrain";
     }
 
     /** Face the chosen heading, push forward, and hop periodically to clear a lip/step. */

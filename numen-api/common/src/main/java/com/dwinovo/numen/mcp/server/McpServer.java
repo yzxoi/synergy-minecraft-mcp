@@ -5,6 +5,8 @@ import com.dwinovo.numen.agent.tool.NumenTool;
 import com.dwinovo.numen.agent.tool.ToolRegistry;
 import com.dwinovo.numen.api.NumenActuator;
 import com.dwinovo.numen.task.TaskTerminalStore;
+import com.dwinovo.numen.event.EventRingBuffer;
+import com.dwinovo.numen.event.EventChannels;
 import com.google.gson.Gson;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
@@ -21,6 +23,7 @@ import java.net.URI;
 import java.net.URLDecoder;
 import java.nio.charset.StandardCharsets;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Set;
 import java.util.List;
 import java.util.UUID;
@@ -184,15 +187,70 @@ public final class McpServer {
                 return;
             }
 
+            JsonElement progressToken = progressTokenOf(parsed);
             HttpResult result = process(parsed, ex.getRequestHeaders().get("MCP-Protocol-Version"));
-            if (result.body() == null) respond(ex, result.status(), "");
-            else respondJson(ex, result.status(), result.body());
+            if (result.body() == null) {
+                respond(ex, result.status(), "");
+            } else if (progressToken != null) {
+                // Opt-in progress stream: the client asked for progress on a tools/call.
+                respondSse(ex, progressToken, result.body());
+            } else {
+                respondJson(ex, result.status(), result.body());
+            }
         } catch (RuntimeException fatal) {
             Constants.LOG.warn("[numen-mcp] request failed: {}", fatal.toString());
             try { respond(ex, 500, ""); } catch (IOException ignored) {}
         } finally {
             ex.close();
         }
+    }
+
+    /** The {@code params._meta.progressToken} of a tools/call request, or null when absent. */
+    private static JsonElement progressTokenOf(JsonElement message) {
+        if (message == null || !message.isJsonObject()) return null;
+        JsonObject req = message.getAsJsonObject();
+        if (!"tools/call".equals(req.has("method") ? req.get("method").getAsString() : null)) return null;
+        if (!req.has("params") || !req.get("params").isJsonObject()) return null;
+        JsonObject params = req.getAsJsonObject("params");
+        if (!params.has("_meta") || !params.get("_meta").isJsonObject()) return null;
+        JsonObject meta = params.getAsJsonObject("_meta");
+        return meta.has("progressToken") && !meta.get("progressToken").isJsonNull()
+                ? meta.get("progressToken") : null;
+    }
+
+    /**
+     * Stream the completion as {@code text/event-stream}: one
+     * {@code notifications/progress} frame, then the {@code CallToolResult}
+     * frame, then close. This is an opt-in convenience for clients that set
+     * {@code _meta.progressToken}; callers without it get the plain JSON
+     * response and see exactly the old behavior.
+     */
+    private void respondSse(HttpExchange ex, JsonElement progressToken, JsonElement finalFrame)
+            throws IOException {
+        ex.getResponseHeaders().add("Content-Type", "text/event-stream");
+        ex.getResponseHeaders().add("Cache-Control", "no-cache");
+        ex.sendResponseHeaders(200, 0);   // chunked
+        try (OutputStream os = ex.getResponseBody()) {
+            JsonObject progress = new JsonObject();
+            progress.addProperty("jsonrpc", "2.0");
+            progress.addProperty("method", "notifications/progress");
+            JsonObject pp = new JsonObject();
+            pp.add("progressToken", progressToken);
+            pp.addProperty("progress", 1);
+            pp.addProperty("total", 1);
+            pp.addProperty("message", "completed");
+            progress.add("params", pp);
+            writeSseFrame(os, progress);
+            writeSseFrame(os, finalFrame);
+            os.flush();
+        }
+    }
+
+    private void writeSseFrame(OutputStream os, JsonElement frame) throws IOException {
+        os.write("event: message\n".getBytes(StandardCharsets.UTF_8));
+        os.write("data: ".getBytes(StandardCharsets.UTF_8));
+        os.write(gson.toJson(frame).getBytes(StandardCharsets.UTF_8));
+        os.write("\n\n".getBytes(StandardCharsets.UTF_8));
     }
 
     private boolean authorized(HttpExchange ex) {
@@ -457,7 +515,7 @@ public final class McpServer {
 
         tools.add(toolDef("list_companions",
                 "List the owner's live Minecraft companions (name + id). Call this first to see who you can drive.",
-                objectSchema(null, false)));
+                objectSchema(null, false), readOnlyAnnotations()));
         tools.add(toolDef("create_companion",
                 "Summon a new companion into the world by name (3–16 letters, digits, or underscore). It arrives "
                         + "in a moment; call list_companions to confirm, then drive it directly — no 'take control' step.",
@@ -466,16 +524,82 @@ public final class McpServer {
         tools.add(toolDef("delete_companion",
                 "Permanently dismiss a companion — it drops its inventory and is gone for good. Takes its name or id.",
                 requiredStringSchema("companion",
-                        "Which companion to dismiss — its name or id (see list_companions).")));
+                        "Which companion to dismiss — its name or id (see list_companions)."),
+                destructiveAnnotations()));
+        tools.add(toolDef("get_events",
+                "Read recent situation/body events for a companion (entered_water, left_water, air_low, damaged, "
+                        + "fell, respawned, nav_stalled, task_finished, body_log, dimension_change) as an incremental "
+                        + "stream. Pass since_id (the next_id of the previous call) to resume without gaps; omit it to "
+                        + "start from the oldest retained event. The ring is bounded (200 events) and not durable.",
+                eventsSchema(), readOnlyAnnotations()));
 
         for (NumenTool tool : ToolRegistry.all()) {
             if (config.isHidden(tool.name())) continue;
-            tools.add(toolDef(tool.name(), descriptionForMcp(tool), withCompanion(tool.parameterSchema())));
+            String toolName = tool.name();
+            if ("task_status".equals(toolName)) {
+                // task_status additionally advertises the unified result shape as its
+                // output schema (MCP 2025-06-18) so clients can validate structuredContent.
+                tools.add(toolDef(toolName, descriptionForMcp(tool),
+                        withCompanion(tool.parameterSchema()), annotationsFor(toolName),
+                        taskResultOutputSchema()));
+                continue;
+            }
+            tools.add(toolDef(toolName, descriptionForMcp(tool),
+                    withCompanion(tool.parameterSchema()), annotationsFor(toolName)));
         }
 
         JsonObject result = new JsonObject();
         result.add("tools", tools);
         return result;
+    }
+
+    /** Tool annotations (MCP 2025-06-18): read-only/idempotent for query tools, destructive for delete. */
+    private JsonObject annotationsFor(String toolName) {
+        return switch (toolName) {
+            case "task_status", "list_companions", "get_self_status", "get_owner_status",
+                    "get_world_info", "look_around", "scan_nearby_entities", "scan_blocks",
+                    "inspect_block", "inspect_block_storage", "inspect_gui", "lookup_recipe",
+                    "blueprint_read", "get_events" -> readOnlyAnnotations();
+            case "delete_companion" -> destructiveAnnotations();
+            default -> null;
+        };
+    }
+
+    private static JsonObject readOnlyAnnotations() {
+        JsonObject ann = new JsonObject();
+        ann.addProperty("readOnlyHint", true);
+        ann.addProperty("idempotentHint", true);
+        return ann;
+    }
+
+    private static JsonObject destructiveAnnotations() {
+        JsonObject ann = new JsonObject();
+        ann.addProperty("destructiveHint", true);
+        return ann;
+    }
+
+    /** get_events schema: companion (required) + since_id + limit (optional). */
+    private JsonObject eventsSchema() {
+        JsonObject schema = new JsonObject();
+        schema.addProperty("type", "object");
+        JsonObject props = new JsonObject();
+        props.add("companion", companionProp());
+        JsonObject since = new JsonObject();
+        since.addProperty("type", "integer");
+        since.addProperty("description", "Resume point: only events with seq > since_id are returned. "
+                + "Omit or pass 0 to start from the oldest retained event.");
+        props.add("since_id", since);
+        JsonObject limit = new JsonObject();
+        limit.addProperty("type", "integer");
+        limit.addProperty("minimum", 1);
+        limit.addProperty("maximum", 200);
+        limit.addProperty("description", "Max events to return (default 50).");
+        props.add("limit", limit);
+        schema.add("properties", props);
+        JsonArray required = new JsonArray();
+        required.add("companion");
+        schema.add("required", required);
+        return schema;
     }
 
     /** Project an engine description into the semantics visible to an MCP caller. */
@@ -501,11 +625,56 @@ public final class McpServer {
     }
 
     private JsonObject toolDef(String name, String description, JsonObject inputSchema) {
+        return toolDef(name, description, inputSchema, null);
+    }
+
+    /** toolDef with optional MCP tool annotations (readOnly/destructive hints). */
+    private JsonObject toolDef(String name, String description, JsonObject inputSchema,
+                               JsonObject annotations) {
+        return toolDef(name, description, inputSchema, annotations, null);
+    }
+
+    /** Full toolDef: input schema + annotations + optional outputSchema (MCP 2025-06-18). */
+    private JsonObject toolDef(String name, String description, JsonObject inputSchema,
+                               JsonObject annotations, JsonObject outputSchema) {
         JsonObject t = new JsonObject();
         t.addProperty("name", name);
         t.addProperty("description", description);
         t.add("inputSchema", inputSchema);
+        if (annotations != null) {
+            t.add("annotations", annotations);
+        }
+        if (outputSchema != null) {
+            t.add("outputSchema", outputSchema);
+        }
         return t;
+    }
+
+    /** The structured shape every tool result's {@code structuredContent} follows. */
+    private static JsonObject taskResultOutputSchema() {
+        JsonObject schema = new JsonObject();
+        schema.addProperty("type", "object");
+        JsonObject props = new JsonObject();
+        props.add("success", prop("boolean", "Whether the action succeeded."));
+        props.add("message", prop("string", "Human-readable outcome summary."));
+        props.add("data", prop("object", "Task-specific structured payload (see tools/list for per-tool shape)."));
+        props.add("code", prop("string", "Machine-readable error domain on failure (validation/not_found/busy/world_state/network/timeout/unsupported/cancelled/internal)."));
+        props.add("retryable", prop("boolean", "Whether retrying the same call as-is is permitted."));
+        props.add("next_steps", prop("array", "Suggested next actions for the model."));
+        props.add("situation", prop("object", "Body situation snapshot: in_water/eye_underwater/air/air_pct/on_ground/hp/hunger/in_lava/dimension/x/y/z/locomotion/active_reflex."));
+        schema.add("properties", props);
+        JsonArray required = new JsonArray();
+        required.add("success");
+        required.add("message");
+        schema.add("required", required);
+        return schema;
+    }
+
+    private static JsonObject prop(String type, String description) {
+        JsonObject p = new JsonObject();
+        p.addProperty("type", type);
+        p.addProperty("description", description);
+        return p;
     }
 
     /** An object schema with just an optional required {@code companion} string. */
@@ -583,17 +752,113 @@ public final class McpServer {
     private JsonObject dispatchToolCall(String name, JsonObject args) {
         try {
             return switch (name) {
-                case "list_companions" -> content(listCompanions(), false);
+                case "list_companions" -> {
+                    JsonObject structured = listCompanions();
+                    yield contentWithStructure(structured.get("message").getAsString(),
+                            structured.toString(), false);
+                }
                 case "create_companion" -> handleCreate(args);
                 case "delete_companion" -> handleDelete(args);
+                case "get_events" -> handleGetEvents(args);
                 default -> handleToolInvoke(name, args);
             };
         } catch (TimeoutException te) {
-            return content("timed out waiting for the action to finish", true);
+            // Transport-level timeout: the action receipt did not come back in
+            // time, so whether the task was actually dispatched is UNKNOWN. Do
+            // not claim the game state was unchanged, and do not invite a blind
+            // retry — that could double-dispatch a task that was accepted.
+            JsonObject structured = new JsonObject();
+            structured.addProperty("success", false);
+            structured.addProperty("message",
+                    "timed out waiting for the action to be accepted; whether it was dispatched is unknown");
+            structured.addProperty("code", "timeout");
+            structured.addProperty("retryable", false);
+            JsonArray next = new JsonArray();
+            next.add("Call task_status (without task_id) to see whether a task is now running on the companion.");
+            next.add("If one is running, track it to terminal with task_status(task_id); if the body is idle, re-issue the action.");
+            structured.add("next_steps", next);
+            return contentWithStructure(structured.get("message").getAsString(),
+                    structured.toString(), true);
         } catch (Exception ex) {
             Constants.LOG.warn("[numen-mcp] tool {} failed: {}", name, ex.toString());
-            return content("call failed; check the game state and try again", true);
+            JsonObject structured = new JsonObject();
+            structured.addProperty("success", false);
+            structured.addProperty("message", "call failed; the game state was not changed by this failure");
+            structured.addProperty("code", "internal");
+            structured.addProperty("retryable", false);
+            JsonArray next = new JsonArray();
+            next.add("Check the companion's status with get_self_status, then decide whether to retry.");
+            structured.add("next_steps", next);
+            return contentWithStructure(structured.get("message").getAsString(),
+                    structured.toString(), true);
         }
+    }
+
+    /** get_events: incremental event stream from the companion's event ring. */
+    private JsonObject handleGetEvents(JsonObject args) throws Exception {
+        UUID target = resolveCompanion(args);
+        if (target == null) {
+            return structuredError("get_events needs a 'companion' argument (a name or id from list_companions)",
+                    "not_found", false,
+                    List.of("Call list_companions to see valid names/ids, then retry."));
+        }
+        long sinceId = 0;
+        if (args.has("since_id") && !args.get("since_id").isJsonNull()) {
+            try {
+                sinceId = Math.max(0, args.get("since_id").getAsLong());
+            } catch (RuntimeException ignored) {
+                sinceId = 0;
+            }
+        }
+        int limit = 50;
+        if (args.has("limit") && !args.get("limit").isJsonNull()) {
+            try {
+                limit = Math.max(1, Math.min(200, args.get("limit").getAsInt()));
+            } catch (RuntimeException ignored) {
+                limit = 50;
+            }
+        }
+
+        JsonObject out = eventsPage(EventChannels.ringOrNull(target), sinceId, limit);
+        int shown = out.getAsJsonArray("events").size();
+        return contentWithStructure("events: " + shown
+                + (shown == 1 ? " entry" : " entries")
+                + " (next_id=" + out.get("next_id").getAsLong() + ")", out.toString(), false);
+    }
+
+    /**
+     * Project one page of events: at most {@code limit} events with seq &gt;
+     * {@code sinceId}, with {@code next_id} = the seq of the LAST RETURNED
+     * event (not the ring's newest). A subsequent call with
+     * {@code since_id = next_id} therefore resumes exactly after what the
+     * client has seen — no gaps and no duplicates even when more events
+     * arrived than fit in one page ({@code truncated=true}). When nothing is
+     * returned, {@code next_id} falls back to the ring's newest seq so the
+     * client can still resume. Pure JDK (no Minecraft objects) so the
+     * truncation contract is headless-testable.
+     */
+    JsonObject eventsPage(EventRingBuffer ring, long sinceId, int limit) {
+        JsonObject out = new JsonObject();
+        JsonArray events = new JsonArray();
+        long nextId;
+        boolean truncated;
+        if (ring == null) {
+            nextId = 0L;
+            truncated = false;
+        } else {
+            java.util.List<Map<String, Object>> all = ring.since(sinceId);
+            int shown = Math.min(all.size(), limit);
+            for (int i = 0; i < shown; i++) {
+                events.add(gson.toJsonTree(all.get(i)));
+            }
+            nextId = shown == 0 ? ring.lastSeq()
+                    : ((Number) all.get(shown - 1).get("seq")).longValue();
+            truncated = all.size() > shown;
+        }
+        out.addProperty("next_id", nextId);
+        out.addProperty("truncated", truncated);
+        out.add("events", events);
+        return out;
     }
 
     /** 参数压成一行 {@code companion=Alice, count=5};过长截断,面板一行放得下。 */
@@ -625,41 +890,85 @@ public final class McpServer {
         return s.length() <= limit ? s : s.substring(0, limit) + "…";
     }
 
-    private String listCompanions() throws Exception {
+    private JsonObject listCompanions() throws Exception {
         List<NumenActuator.Companion> list = NumenActuator.companions()
                 .get(CONTROL_TIMEOUT_SECONDS, TimeUnit.SECONDS);
+        JsonObject structured = new JsonObject();
+        structured.addProperty("success", true);
+        JsonArray companions = new JsonArray();
         if (list.isEmpty()) {
-            return "No companions are live in the world right now. Summon one in-game first.";
+            structured.addProperty("message",
+                    "No companions are live in the world right now. Summon one in-game first.");
+        } else {
+            StringBuilder sb = new StringBuilder("Live companions:\n");
+            for (NumenActuator.Companion c : list) {
+                sb.append("- ").append(c.name()).append("  (id: ").append(c.uuid()).append(")\n");
+                JsonObject entry = new JsonObject();
+                entry.addProperty("name", c.name());
+                entry.addProperty("uuid", c.uuid().toString());
+                companions.add(entry);
+            }
+            structured.addProperty("message", sb.toString().stripTrailing());
         }
-        StringBuilder sb = new StringBuilder("Live companions:\n");
-        for (NumenActuator.Companion c : list) {
-            sb.append("- ").append(c.name()).append("  (id: ").append(c.uuid()).append(")\n");
-        }
-        return sb.toString().stripTrailing();
+        structured.add("companions", companions);
+        return structured;
     }
 
     private JsonObject handleCreate(JsonObject args) throws Exception {
         String name = args.has("name") && !args.get("name").isJsonNull()
                 ? args.get("name").getAsString().trim() : "";
         if (name.isEmpty()) {
-            return content("create_companion needs a 'name' (3–16 letters, digits, or underscore)", true);
+            return structuredError("create_companion needs a 'name' (3–16 letters, digits, or underscore)",
+                    "validation", false,
+                    List.of("Pass a name (3–16 letters, digits, or underscore)."));
         }
         boolean ok = NumenActuator.create(name).get(CONTROL_TIMEOUT_SECONDS, TimeUnit.SECONDS);
         if (!ok) {
-            return content("could not summon — is the game in a world?", true);
+            return structuredError("could not summon — is the game in a world?",
+                    "world_state", false,
+                    List.of("Start or enter a Minecraft world, then retry."));
         }
-        return content("summoning '" + name + "' — it arrives in a moment; call list_companions to confirm, "
-                + "then drive it directly (no acquire needed)", false);
+        String message = "summoning '" + name + "' — it arrives in a moment; call list_companions to confirm, "
+                + "then drive it directly (no acquire needed)";
+        JsonObject structured = new JsonObject();
+        structured.addProperty("success", true);
+        structured.addProperty("message", message);
+        structured.addProperty("name", name);
+        return contentWithStructure(message, structured.toString(), false);
     }
 
     private JsonObject handleDelete(JsonObject args) throws Exception {
         UUID target = resolveCompanion(args);
         if (target == null) {
-            return content("no such companion — call list_companions to see valid names/ids", true);
+            return structuredError("no such companion — call list_companions to see valid names/ids",
+                    "not_found", false,
+                    List.of("Call list_companions to see valid names/ids, then retry."));
         }
         boolean ok = NumenActuator.delete(target).get(CONTROL_TIMEOUT_SECONDS, TimeUnit.SECONDS);
-        return content(ok ? "dismissed " + target + " — it dropped its inventory and is gone for good"
-                : "could not dismiss " + target, !ok);
+        if (!ok) {
+            return structuredError("could not dismiss " + target, "world_state", false,
+                    List.of("Check the companion is still live (list_companions), then retry."));
+        }
+        String message = "dismissed " + target + " — it dropped its inventory and is gone for good";
+        JsonObject structured = new JsonObject();
+        structured.addProperty("success", true);
+        structured.addProperty("message", message);
+        structured.addProperty("companion_uuid", target.toString());
+        return contentWithStructure(message, structured.toString(), false);
+    }
+
+    /** A structured error envelope: readable text + machine-readable code/retryable/next_steps. */
+    private JsonObject structuredError(String message, String code, boolean retryable,
+                                       List<String> nextSteps) {
+        JsonObject structured = new JsonObject();
+        structured.addProperty("success", false);
+        structured.addProperty("message", message);
+        structured.addProperty("code", code);
+        structured.addProperty("retryable", retryable);
+        JsonArray next = new JsonArray();
+        for (String s : nextSteps) next.add(s);
+        structured.add("next_steps", next);
+        return contentWithStructure(message, structured.toString(), true);
     }
 
     private JsonObject handleToolInvoke(String toolName, JsonObject args) throws Exception {
@@ -667,14 +976,43 @@ public final class McpServer {
         if (target == null) {
             if ("task_status".equals(toolName)) {
                 String retained = retainedDeadTaskStatus(args);
-                if (retained != null) return content(retained, false);
+                if (retained != null) {
+                    // Death window: the body is temporarily despawned, so the
+                    // blocking wait cannot run on a live snapshot. Say so
+                    // instead of silently returning instantly after the caller
+                    // asked to wait.
+                    if (requestsWait(args)) {
+                        retained = annotateWaitUnavailable(retained);
+                    }
+                    return contentWithStructure(retained, retained, false);
+                }
             }
             return content("this tool needs a 'companion' argument (a name or id from list_companions)", true);
         }
         JsonObject toolArgs = args.deepCopy();
         toolArgs.remove("companion");
-        String result = NumenActuator.invoke(target, toolName, toolArgs.toString())
-                .get(config.callTimeoutSeconds(), TimeUnit.SECONDS);
+
+        // task_status supports blocking wait: poll the same task on the HTTP
+        // thread until terminal or the wait budget elapses. Never blocks the
+        // server tick thread — the underlying invoke stays a quick snapshot.
+        int waitSeconds = 0;
+        if ("task_status".equals(toolName)
+                && toolArgs.has("wait_seconds") && !toolArgs.get("wait_seconds").isJsonNull()) {
+            try {
+                waitSeconds = Math.max(0, Math.min(60, toolArgs.get("wait_seconds").getAsInt()));
+            } catch (RuntimeException ignored) {
+                waitSeconds = 0;
+            }
+        }
+
+        String result = waitForTerminal(() -> {
+            try {
+                return NumenActuator.invoke(target, toolName, toolArgs.toString())
+                        .get(config.callTimeoutSeconds(), TimeUnit.SECONDS);
+            } catch (Exception e) {
+                throw new RuntimeException(e);
+            }
+        }, waitSeconds);
         boolean isError = false;
         try {
             JsonObject r = JsonParser.parseString(result).getAsJsonObject();
@@ -682,7 +1020,56 @@ public final class McpServer {
         } catch (RuntimeException ignored) {
             // non-JSON result — treat as plain text, not an error
         }
-        return content(result, isError);
+        return contentWithStructure(result, result, isError);
+    }
+
+    /**
+     * Poll a task-status snapshot supplier until the snapshot reports a terminal
+     * state or the wait budget elapses. Pure logic (no Minecraft objects) so the
+     * three wait semantics are headless-testable:
+     * <ul>
+     *   <li>{@code waitSeconds <= 0} — single snapshot, never blocks;</li>
+     *   <li>terminal snapshot — returns immediately regardless of the budget;</li>
+     *   <li>non-terminal after the budget — returns the latest snapshot with
+     *       {@code timed_out_waiting: true} attached.</li>
+     * </ul>
+     */
+    static String waitForTerminal(java.util.function.Supplier<String> snapshotSupplier,
+                                  int waitSeconds) {
+        long deadline = System.nanoTime() + (long) Math.max(0, waitSeconds) * 1_000_000_000L;
+        String result = "";
+        boolean terminal;
+        while (true) {
+            result = snapshotSupplier.get();
+            terminal = false;
+            try {
+                JsonObject r = JsonParser.parseString(result).getAsJsonObject();
+                if (r.has("data") && r.getAsJsonObject("data").has("terminal")) {
+                    terminal = r.getAsJsonObject("data").get("terminal").getAsBoolean();
+                }
+            } catch (RuntimeException ignored) {
+                // non-JSON result — treat as plain text, never terminal
+            }
+            if (terminal || waitSeconds <= 0 || System.nanoTime() >= deadline) {
+                if (waitSeconds > 0 && !terminal && System.nanoTime() >= deadline) {
+                    // Attach the "still waiting" hint without mutating the tool's own JSON.
+                    try {
+                        JsonObject r = JsonParser.parseString(result).getAsJsonObject();
+                        r.addProperty("timed_out_waiting", true);
+                        result = r.toString();
+                    } catch (RuntimeException ignored) {
+                        // keep the raw result
+                    }
+                }
+                return result;
+            }
+            try {
+                Thread.sleep(100);
+            } catch (InterruptedException ie) {
+                Thread.currentThread().interrupt();
+                return result;
+            }
+        }
     }
 
     /** Resolve a retained terminal receipt after the body has temporarily despawned on death. */
@@ -700,6 +1087,27 @@ public final class McpServer {
             }
         } catch (IllegalArgumentException ignored) {
             return null;
+        }
+    }
+
+    /** Whether the caller asked for a blocking wait ({@code wait_seconds > 0}). */
+    private static boolean requestsWait(JsonObject args) {
+        if (!args.has("wait_seconds") || args.get("wait_seconds").isJsonNull()) return false;
+        try {
+            return args.get("wait_seconds").getAsInt() > 0;
+        } catch (RuntimeException ignored) {
+            return false;
+        }
+    }
+
+    /** Mark a retained-status response with {@code wait_not_applied} when the body is unreachable. */
+    private static String annotateWaitUnavailable(String retained) {
+        try {
+            JsonObject r = JsonParser.parseString(retained).getAsJsonObject();
+            r.addProperty("wait_not_applied", true);
+            return r.toString();
+        } catch (RuntimeException ignored) {
+            return retained;
         }
     }
 
@@ -726,6 +1134,7 @@ public final class McpServer {
 
     // ---- result envelopes ----
 
+    /** Plain-text result (no structuredContent) — the legacy envelope. */
     private JsonObject content(String text, boolean isError) {
         JsonObject item = new JsonObject();
         item.addProperty("type", "text");
@@ -735,6 +1144,28 @@ public final class McpServer {
         JsonObject result = new JsonObject();
         result.add("content", arr);
         result.addProperty("isError", isError);
+        return result;
+    }
+
+    /**
+     * Result with both the readable text block and a machine-readable
+     * {@code structuredContent} mirror (MCP 2025-06-18). The structured value
+     * is derived from the tool's JSON result when it parses; otherwise it is
+     * omitted so legacy clients see exactly the old envelope.
+     */
+    private JsonObject contentWithStructure(String text, String toolResultJson, boolean isError) {
+        JsonObject result = content(text, isError);
+        JsonElement structured = null;
+        if (toolResultJson != null) {
+            try {
+                structured = JsonParser.parseString(toolResultJson);
+            } catch (RuntimeException ignored) {
+                structured = null;
+            }
+        }
+        if (structured != null && structured.isJsonObject()) {
+            result.add("structuredContent", structured);
+        }
         return result;
     }
 

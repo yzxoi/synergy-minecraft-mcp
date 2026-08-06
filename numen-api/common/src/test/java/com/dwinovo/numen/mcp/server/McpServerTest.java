@@ -12,6 +12,7 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.time.Duration;
 import java.util.List;
+import java.util.Map;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -301,5 +302,117 @@ class McpServerTest {
         JsonObject error = json(response).getAsJsonObject("error");
         assertEquals(code, error.get("code").getAsInt());
         assertEquals(message, error.get("message").getAsString());
+    }
+
+    @Test
+    void toolsListAdvertisesGetEventsWithReadOnlyAnnotations() throws Exception {
+        start("");
+
+        JsonObject listed = json(post(request(3, "tools/list", "{}"), PROTOCOL_VERSION, null));
+        JsonArray tools = listed.getAsJsonObject("result").getAsJsonArray("tools");
+        assertTrue(hasTool(tools, "get_events"));
+
+        JsonObject getEvents = null;
+        for (var tool : tools) {
+            JsonObject t = tool.getAsJsonObject();
+            if ("get_events".equals(t.get("name").getAsString())) getEvents = t;
+        }
+        assertTrue(getEvents != null);
+        JsonObject annotations = getEvents.getAsJsonObject("annotations");
+        assertTrue(annotations.get("readOnlyHint").getAsBoolean());
+        assertTrue(annotations.get("idempotentHint").getAsBoolean());
+        JsonObject input = getEvents.getAsJsonObject("inputSchema");
+        assertTrue(input.getAsJsonObject("properties").has("companion"));
+        assertTrue(input.getAsJsonObject("properties").has("since_id"));
+    }
+
+    @Test
+    void taskStatusSchemaAdvertisesWaitSeconds() {
+        // The engine registry is not populated under a plain unit test, so check
+        // the tool's own schema directly (the MCP projection injects companion +
+        // annotations on top of this shape).
+        Map<String, Object> schema = new com.dwinovo.numen.task.TaskStatusTool().parameterSchema();
+        @SuppressWarnings("unchecked")
+        Map<String, Object> props = (Map<String, Object>) schema.get("properties");
+        assertTrue(props.containsKey("wait_seconds"));
+        @SuppressWarnings("unchecked")
+        Map<String, Object> ws = (Map<String, Object>) props.get("wait_seconds");
+        assertEquals(0, ws.get("minimum"));
+        assertEquals(60, ws.get("maximum"));
+    }
+
+    @Test
+    void deleteCompanionCarriesDestructiveAnnotation() throws Exception {
+        start("");
+
+        JsonObject listed = json(post(request(3, "tools/list", "{}"), PROTOCOL_VERSION, null));
+        JsonArray tools = listed.getAsJsonObject("result").getAsJsonArray("tools");
+        for (var tool : tools) {
+            JsonObject t = tool.getAsJsonObject();
+            if ("delete_companion".equals(t.get("name").getAsString())) {
+                assertTrue(t.getAsJsonObject("annotations").get("destructiveHint").getAsBoolean());
+                return;
+            }
+        }
+        throw new AssertionError("delete_companion not advertised");
+    }
+
+    @Test
+    void toolResultsCarryStructuredContentMirror() throws Exception {
+        start("");
+
+        HttpResponse<String> response = post("""
+                {"jsonrpc":"2.0","id":11,"method":"tools/call","params":{
+                  "name":"delete_companion","arguments":{"companion":"ghost"}
+                }}
+                """, PROTOCOL_VERSION, null);
+
+        assertEquals(200, response.statusCode());
+        JsonObject result = json(response).getAsJsonObject("result");
+        assertTrue(result.get("isError").getAsBoolean());
+        // structuredContent mirrors the tool's own JSON envelope (no such companion).
+        JsonObject structured = result.getAsJsonObject("structuredContent");
+        assertTrue(structured.get("success").isJsonPrimitive());
+        assertFalse(structured.get("success").getAsBoolean());
+    }
+
+    @Test
+    void eventsPageNextIdResumesAfterLastReturnedEventWhenTruncated() {
+        com.dwinovo.numen.event.EventRingBuffer ring = new com.dwinovo.numen.event.EventRingBuffer(50);
+        for (int i = 1; i <= 5; i++) {
+            ring.append("kind_" + i, i * 10L, Map.of("n", i));
+        }
+        McpServer server = new McpServer(new McpConfig(false, "127.0.0.1", 0, "", 5, List.of(), List.of()));
+
+        // 5 events exist, page limit 2: first page returns events 1-2, next_id=2.
+        JsonObject page1 = server.eventsPage(ring, 0, 2);
+        assertEquals(2, page1.getAsJsonArray("events").size());
+        assertEquals(2L, page1.get("next_id").getAsLong());
+        assertTrue(page1.get("truncated").getAsBoolean());
+
+        // Resuming from next_id=2 returns exactly events 3-4 (no gap, no dup), next_id=4.
+        JsonObject page2 = server.eventsPage(ring, page1.get("next_id").getAsLong(), 2);
+        assertEquals(2, page2.getAsJsonArray("events").size());
+        assertEquals("kind_3", page2.getAsJsonArray("events").get(0).getAsJsonObject().get("kind").getAsString());
+        assertEquals(4L, page2.get("next_id").getAsLong());
+        assertTrue(page2.get("truncated").getAsBoolean());
+
+        // Final page: the remaining event, next_id=5, no longer truncated.
+        JsonObject page3 = server.eventsPage(ring, page2.get("next_id").getAsLong(), 2);
+        assertEquals(1, page3.getAsJsonArray("events").size());
+        assertEquals("kind_5", page3.getAsJsonArray("events").get(0).getAsJsonObject().get("kind").getAsString());
+        assertEquals(5L, page3.get("next_id").getAsLong());
+        assertFalse(page3.get("truncated").getAsBoolean());
+    }
+
+    @Test
+    void eventsPageEmptyRingReportsZeroAndNoTruncation() {
+        com.dwinovo.numen.event.EventRingBuffer ring = new com.dwinovo.numen.event.EventRingBuffer(10);
+        McpServer server = new McpServer(new McpConfig(false, "127.0.0.1", 0, "", 5, List.of(), List.of()));
+
+        JsonObject page = server.eventsPage(ring, 0, 10);
+        assertEquals(0, page.getAsJsonArray("events").size());
+        assertEquals(0L, page.get("next_id").getAsLong());
+        assertFalse(page.get("truncated").getAsBoolean());
     }
 }

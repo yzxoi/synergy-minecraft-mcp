@@ -233,6 +233,16 @@ Numen 不是把一句话直接翻译成一个巨大动作，而是“感知 → 
 }
 ```
 
+`task_status` 支持阻塞等待：传 `wait_seconds`（0–60）后，服务器会在 HTTP 线程上等到任务终态或超时，省去高频轮询。等待超时返回的快照带 `timed_out_waiting: true`，用同一 `task_id` 再调一次即可继续等：
+
+```json
+{
+  "companion": "Alice",
+  "task_id": "t42",
+  "wait_seconds": 10
+}
+```
+
 `task_status` 的主要字段：
 
 | 字段 | 含义 |
@@ -246,14 +256,42 @@ Numen 不是把一句话直接翻译成一个巨大动作，而是“感知 → 
 | `progress.seconds_since_progress` | 距离上次实质进展的秒数 |
 | `progress.stalled` | 是否超过该任务的停滞预警阈值 |
 | `result` | 终态结果；必须检查 `success`、`timed_out`、`interrupted` 和 `data` |
+| `result.code` | 失败时的机器可读错误域：`validation`/`not_found`/`busy`/`world_state`/`network`/`timeout`/`unsupported`/`cancelled`/`internal` |
+| `result.retryable` | 失败时是否允许原样重试同一调用 |
+| `result.next_steps` | 失败时给模型的下一步建议（可执行） |
+| `result.situation` | 任务结束瞬间的身体处境快照（见下方字段） |
+| `situation` | 快照顶层也镜像一份处境快照，无需进 `result` 就能看到 |
+
+`situation` 字段：`in_water`、`eye_underwater`、`air`、`air_pct`、`on_ground`、
+`hp`、`hunger`、`in_lava`、`dimension`、`x/y/z`、`locomotion`（on_ground /
+in_water / swimming / in_lava / elytra_flying / airborne）、`active_reflex`（当前
+调度链名，如 breath / unstuck，无则 `none`）。模型应在轮询结果时顺便读它，
+避免「身体已经掉进水里，大脑还在继续 goto」。
+
+### 5.2.1 事件通道 `get_events`
+
+外接大脑可用 `get_events` 拉取同伴的增量事件流（有界环形缓冲，200 条，不持久）：
+
+```json
+{
+  "companion": "Alice",
+  "since_id": 0,
+  "limit": 50
+}
+```
+
+返回 `{events: [{seq, ts, kind, data}], next_id, truncated}`；下次调用把 `next_id`
+传给 `since_id` 即可无空洞续读。事件类型：`entered_water`、`left_water`、`air_low`
+（≤90 tick）、`damaged`（HP 降 ≥1 心）、`fell`（≥3 格）、`respawned`、
+`task_finished`、`body_log`、`dimension_change`。同一类型 2 秒内最多发一次，避免刷屏。
 
 推荐控制循环：
 
 1. 先感知环境。
 2. 只派一个身体动作，保存 `task_id`。
-3. 间隔若干秒查询同一个 `task_id`，不要高频空转。
-4. 到 `terminal: true` 后读取 `result`，不能仅凭“身体空闲”推断成功。
-5. 再调用感知工具确认真实世界状态。
+3. 用 `task_status(wait_seconds=N)` 阻塞等待；超时再续等，不要高频空转。
+4. 到 `terminal: true` 后读取 `result`（含 `code`/`retryable`/`next_steps`/`situation`），不能仅凭“身体空闲”推断成功。
+5. 再调用感知工具确认真实世界状态；或用 `get_events` 看等待期间发生了哪些处境事件。
 6. 若连续多次 `stalled: true`，根据 phase/message 判断是等待、补物资，还是 `task_stop` 后重新规划。
 
 停止示例：

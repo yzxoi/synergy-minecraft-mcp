@@ -44,16 +44,18 @@ public final class TaskDispatch {
             TaskRecord busy = CompanionTickDispatcher.asyncTaskFor(companion.getUUID());
             reply.accept(TaskResult.fail(busy != null
                     ? busyMessage(busy, record)
-                    : "身体正在收尾上一个任务,稍候再派。").toJson());
+                    : "The body is still winding down the previous task; dispatch again shortly.").toJson());
             return;
         }
         record.markAsync();
         CompanionTickDispatcher.queueFor(companion.getUUID()).enqueue(record);
         // 内置大脑靠 task_finished 事件收尾(别轮询);外部(MCP)按受理时的 task_id
-        // 轮询结构化快照。终态会短期保留,不能再用“身体空闲”猜测任务是否成功。
+        // 轮询结构化快照。终态会短期保留,不能再用"身体空闲"猜测任务是否成功。
         String note = record.isExternalCall()
-                ? "已受理,后台执行中。用 task_status(task_id) 轮询到终态并读取 result;再用感知工具确认世界状态。task_stop 可叫停。"
-                : "已受理,后台执行中。完成会自动收到 task_finished 事件,不要轮询;task_status 查进度,task_stop 叫停。";
+                ? "Accepted; running in the background. Poll task_status(task_id) to the terminal state "
+                + "and read result; then confirm the world with a perception tool. task_stop can cancel it."
+                : "Accepted; running in the background. You will receive a task_finished event when it "
+                + "completes — do not poll; use task_status for progress and task_stop to cancel.";
         reply.accept(TaskResult.ok(
                 note,
                 java.util.Map.of(
@@ -68,11 +70,12 @@ public final class TaskDispatch {
      * 事件都不会到被拒者手里——照旧引导它"等事件"等于教它死等,只能建议 task_stop。
      */
     private static String busyMessage(TaskRecord busy, TaskRecord caller) {
-        String head = "身体正忙: " + busy.publicId() + "(" + busy.describe() + ") 后台进行中。";
+        String head = "The body is busy: " + busy.publicId() + " (" + busy.describe()
+                + ") is running in the background.";
         boolean eventReachesCaller = !busy.isExternalCall() && !caller.isExternalCall();
         return eventReachesCaller
-                ? head + "先 task_stop 叫停,或等它的 task_finished 事件再派新活。"
-                : head + "先 task_stop 叫停,或用 task_status(task_id=\"" + busy.publicId()
-                        + "\") 跟踪到终态后再派新活。";
+                ? head + " Stop it with task_stop, or wait for its task_finished event before dispatching new work."
+                : head + " Stop it with task_stop, or track it to the terminal state via "
+                        + "task_status(task_id=\"" + busy.publicId() + "\") before dispatching new work.";
     }
 }

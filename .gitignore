@@ -11,3 +11,5 @@
 **/config/numen/mcp_server.json
 **/config/numen/mcp_clients.json
 .maven-local/
+# Local JDK used for offline verification (not part of the build).
+.jdk21/
