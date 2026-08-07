@@ -36,7 +36,15 @@ public final class AutoMineTool implements NumenTool {
                 + "needed tier if nothing qualifies (to destroy a block regardless of drops, first goto it "
                 + "then use interact_at with button=left and its x,y,z). BACKGROUND: a successful call is already running; do not call mine/goto "
                 + "again while <current_task> exists and do not poll. task_finished status=done means the "
-                + "requested count is complete; only timeout permits resending the same arguments.";
+                + "requested count is complete; only timeout permits resending the same arguments. "
+                + "SCAFFOLD COST: navigation bridges gaps and pillars up by PLACING blocks from your "
+                + "inventory — anything in the throwaway-scaffold tag (cobblestone, stone, dirt, deepslate, "
+                + "netherrack, andesite, diorite, granite, tuff, ...) can be consumed climbing back out, so "
+                + "a mine task may report gathered=N while your backpack holds fewer than N of a "
+                + "scaffold-typed item. That is the pathfinder working, not a counting bug. If you must "
+                + "KEEP the material, convert it immediately (smelt ores, craft planks/ingots/glass) or "
+                + "store it in a chest before traveling far; iron ingots and diamonds are never consumed. "
+                + "For cobblestone/stone/dirt runs, request ~25% extra to cover the climb out.";
     }
 
 
