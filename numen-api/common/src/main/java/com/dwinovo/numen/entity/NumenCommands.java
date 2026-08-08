@@ -52,6 +52,11 @@ public final class NumenCommands {
         ServerLevel level = (ServerLevel) owner.level();
         NumenPlayer body = Companions.summon(
                 level.getServer(), owner.getUUID(), name, level, owner.position());
+        if (body == null) {
+            ctx.getSource().sendFailure(
+                    Component.literal("\u300C" + name + "\u300D\u6B63\u5728\u590D\u6D3B\u4E2D\uFF0C\u8BF7\u7A0D\u540E\u518D\u8BD5"));
+            return 0;
+        }
         // Push the updated roster so the owner's G panel can reach the new companion.
         Companions.syncRosterToOwner(level.getServer(), owner);
         ctx.getSource().sendSuccess(() ->

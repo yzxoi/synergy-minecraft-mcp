@@ -72,10 +72,15 @@ public record SummonRequestPayload(String name, String skinValue, String skinSig
             com.dwinovo.numen.Constants.LOG.info("[numen-skin] 召唤 {} 携带自定义皮肤数据,直接入册", name);
             try {
                 ServerLevel level = (ServerLevel) owner.level();
-                Companions.summon(server, owner.getUUID(), name, level, owner.position(),
+                var body = Companions.summon(server, owner.getUUID(), name, level, owner.position(),
                         new com.dwinovo.numen.entity.MojangSkins.Skin(value,
                                 p.skinSig() == null ? "" : p.skinSig()));
-                Companions.syncRosterToOwner(server, owner);
+                if (body != null) {
+                    Companions.syncRosterToOwner(server, owner);
+                } else {
+                    owner.sendSystemMessage(net.minecraft.network.chat.Component.literal(
+                            "[Numen] 「" + name + "」正在复活中，请稍后再试"));
+                }
             } finally {
                 SPAWNING.remove(spawnKey);
             }
@@ -87,8 +92,13 @@ public record SummonRequestPayload(String name, String skinValue, String skinSig
             try {
                 if (owner.hasDisconnected()) return;
                 ServerLevel level = (ServerLevel) owner.level();
-                Companions.summon(server, owner.getUUID(), name, level, owner.position(), skin);
-                Companions.syncRosterToOwner(server, owner);   // push the new roster to the owner
+                var body = Companions.summon(server, owner.getUUID(), name, level, owner.position(), skin);
+                if (body != null) {
+                    Companions.syncRosterToOwner(server, owner);   // push the new roster to the owner
+                } else {
+                    owner.sendSystemMessage(net.minecraft.network.chat.Component.literal(
+                            "[Numen] 「" + name + "」正在复活中，请稍后再试"));
+                }
             } finally {
                 SPAWNING.remove(spawnKey);
             }
