@@ -15,6 +15,7 @@ class ErrorCodeTest {
         assertEquals("not_found", ErrorCode.NOT_FOUND.code());
         assertEquals("busy", ErrorCode.BUSY.code());
         assertEquals("world_state", ErrorCode.WORLD_STATE.code());
+        assertEquals("low_health", ErrorCode.LOW_HEALTH.code());
         assertEquals("network", ErrorCode.NETWORK.code());
         assertEquals("timeout", ErrorCode.TIMEOUT.code());
         assertEquals("unsupported", ErrorCode.UNSUPPORTED.code());
@@ -26,6 +27,7 @@ class ErrorCodeTest {
     void retryPolicySeparatesTransientFromPermanent() {
         assertTrue(ErrorCode.NETWORK.retryable());
         assertTrue(ErrorCode.TIMEOUT.retryable());
+        assertTrue(ErrorCode.LOW_HEALTH.retryable());
         assertFalse(ErrorCode.VALIDATION.retryable());
         assertFalse(ErrorCode.NOT_FOUND.retryable());
         assertFalse(ErrorCode.BUSY.retryable());
@@ -37,6 +39,7 @@ class ErrorCodeTest {
     void fromCodeResolvesKnownValuesAndDefaultsUnknownsToWorldState() {
         assertEquals(ErrorCode.NETWORK, ErrorCode.fromCode("network"));
         assertEquals(ErrorCode.TIMEOUT, ErrorCode.fromCode("timeout"));
+        assertEquals(ErrorCode.LOW_HEALTH, ErrorCode.fromCode("low_health"));
         assertEquals(ErrorCode.WORLD_STATE, ErrorCode.fromCode("totally-unknown"));
         assertEquals(ErrorCode.WORLD_STATE, ErrorCode.fromCode(null));
     }

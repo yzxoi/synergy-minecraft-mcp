@@ -33,6 +33,7 @@ class DescriptionsTest {
     private static List<NumenTool> roster() {
         return List.of(
                 new MoveToTool(), new MeleeAttackTool(), new RangedAttackTool(),
+                new CombatTool(), new CombatStatusTool(),
                 new LocateStructureTool(), new LocateBiomeTool(), new CollectItemsTool(),
                 new FishTool(), new AutoMineTool(), new EquipItemTool(), new BuildTool(),
                 new BlueprintTool(), new BlueprintReadTool(), new InteractAtTool(),

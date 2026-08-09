@@ -33,7 +33,7 @@ class McpServerInstructionsTest {
     @Test
     void externalAsyncDescriptionsDefineTheMcpPollingContract() {
         for (String name : List.of("goto", "mine", "build", "blueprint", "collect_items",
-                "fish", "melee_attack", "ranged_attack")) {
+                "fish", "melee_attack", "ranged_attack", "combat")) {
             String description = McpServer.descriptionForMcp(new FakeTool(name,
                     "wait for task_finished; status=done; do not poll; while <current_task> exists; use break_block"));
             assertTrue(description.startsWith("MCP external driver:"), name);

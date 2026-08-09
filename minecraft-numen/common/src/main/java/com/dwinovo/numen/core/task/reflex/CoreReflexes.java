@@ -6,7 +6,7 @@ import com.dwinovo.numen.task.reflex.PolicyReflex;
 
 import com.dwinovo.numen.core.task.chain.FoodChain;
 import com.dwinovo.numen.core.task.chain.MLGChain;
-import com.dwinovo.numen.core.task.chain.MobDefenseChain;
+import com.dwinovo.numen.core.task.chain.TacticalCombatChain;
 import com.dwinovo.numen.core.task.chain.UnstuckChain;
 
 /**
@@ -26,7 +26,7 @@ public final class CoreReflexes {
     public static void registerAll() {
         ReflexRegistry.register(new MLGChain());
         ReflexRegistry.register(new com.dwinovo.numen.core.task.chain.BreathChain());
-        ReflexRegistry.register(new MobDefenseChain());
+        ReflexRegistry.register(new TacticalCombatChain());
         ReflexRegistry.register(new FoodChain());
         ReflexRegistry.register(new UnstuckChain());
         ReflexRegistry.register(new PolicyReflex(FOOD_POLICY_ID,

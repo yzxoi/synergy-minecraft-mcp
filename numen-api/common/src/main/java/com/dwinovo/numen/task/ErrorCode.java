@@ -27,6 +27,8 @@ public enum ErrorCode {
     BUSY("busy", "The body is busy with another task.", false),
     /** The world refused the action (unreachable, hazard, wrong dimension, no material). */
     WORLD_STATE("world_state", "The world does not permit this action right now.", false),
+    /** Combat was blocked or stopped because health crossed its configured safety threshold. */
+    LOW_HEALTH("low_health", "Health is below the configured combat safety threshold.", true),
     /** Transport failure (timeout, disconnect, oversized body) — the game state was NOT changed. */
     NETWORK("network", "A transport error occurred; the game state was not changed.", true),
     /** The operation did not finish within its time budget. */

@@ -58,7 +58,7 @@ import java.util.concurrent.TimeoutException;
 public final class McpServer {
 
     private static final String PROTOCOL_VERSION = "2025-06-18";
-    private static final String SERVER_VERSION = "0.1.0";
+    private static final String SERVER_VERSION = "0.2.0";
     /** Roster / create / delete are fast; only tool actions use the config timeout. */
     private static final int CONTROL_TIMEOUT_SECONDS = 10;
     /** 活动流里一条参数/结果摘要的截断长度——面板一行放得下即可。 */
@@ -69,7 +69,7 @@ public final class McpServer {
     /** Long-running tools whose MCP caller receives a task receipt, not an event push. */
     private static final Set<String> EXTERNAL_ASYNC_TOOLS = Set.of(
             "goto", "mine", "build", "blueprint", "collect_items", "fish",
-            "melee_attack", "ranged_attack");
+            "melee_attack", "ranged_attack", "combat");
 
     /**
      * MCP is a request/response transport: external callers do not receive the
@@ -99,9 +99,9 @@ public final class McpServer {
             no 'take control' handshake.
 
             Loop: (1) list_companions to see who is live — create_companion by name to summon a new one, \
-            delete_companion to dismiss one for good; (2) perceive with get_self_status / scan_blocks / \
-            scan_nearby_entities; (3) act with goto / mine / build / craft / equip_item / fish / \
-            melee_attack / ranged_attack / interact_at / etc. Long actions return a task_id at once — \
+            delete_companion to dismiss one for good; (2) perceive with get_self_status / combat_status / \
+            scan_blocks / scan_nearby_entities; (3) act with goto / mine / build / craft / equip_item / fish / \
+            combat / melee_attack / ranged_attack / interact_at / etc. Long actions return a task_id at once — \
             poll task_status with that task_id until \
             its state is terminal, inspect its structured result, then perceive to confirm. Every action \
             tool takes a 'companion' argument (name or id), so each \
@@ -528,7 +528,7 @@ public final class McpServer {
                 destructiveAnnotations()));
         tools.add(toolDef("get_events",
                 "Read recent situation/body events for a companion (entered_water, left_water, air_low, damaged, "
-                        + "fell, respawned, nav_stalled, task_finished, body_log, dimension_change) as an incremental "
+                        + "combat, fell, respawned, nav_stalled, task_finished, body_log, dimension_change) as an incremental "
                         + "stream. Pass since_id (the next_id of the previous call) to resume without gaps; omit it to "
                         + "start from the oldest retained event. The ring is bounded (200 events) and not durable.",
                 eventsSchema(), readOnlyAnnotations()));
@@ -556,7 +556,7 @@ public final class McpServer {
     /** Tool annotations (MCP 2025-06-18): read-only/idempotent for query tools, destructive for delete. */
     private JsonObject annotationsFor(String toolName) {
         return switch (toolName) {
-            case "task_status", "list_companions", "get_self_status", "get_owner_status",
+            case "task_status", "combat_status", "list_companions", "get_self_status", "get_owner_status",
                     "get_world_info", "look_around", "scan_nearby_entities", "scan_blocks",
                     "inspect_block", "inspect_block_storage", "inspect_gui", "lookup_recipe",
                     "blueprint_read", "get_events" -> readOnlyAnnotations();
@@ -658,7 +658,7 @@ public final class McpServer {
         props.add("success", prop("boolean", "Whether the action succeeded."));
         props.add("message", prop("string", "Human-readable outcome summary."));
         props.add("data", prop("object", "Task-specific structured payload (see tools/list for per-tool shape)."));
-        props.add("code", prop("string", "Machine-readable error domain on failure (validation/not_found/busy/world_state/network/timeout/unsupported/cancelled/internal)."));
+        props.add("code", prop("string", "Machine-readable error domain on failure (validation/not_found/busy/world_state/low_health/network/timeout/unsupported/cancelled/internal)."));
         props.add("retryable", prop("boolean", "Whether retrying the same call as-is is permitted."));
         props.add("next_steps", prop("array", "Suggested next actions for the model."));
         props.add("situation", prop("object", "Body situation snapshot: in_water/eye_underwater/air/air_pct/on_ground/hp/hunger/in_lava/dimension/x/y/z/locomotion/active_reflex."));

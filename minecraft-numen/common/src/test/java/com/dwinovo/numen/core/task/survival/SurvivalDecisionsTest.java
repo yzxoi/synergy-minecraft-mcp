@@ -8,6 +8,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /** Pure tests for the survival decision math — no Minecraft. */
+@SuppressWarnings("removal")
 class SurvivalDecisionsTest {
 
     private static final float NEG = Float.NEGATIVE_INFINITY;

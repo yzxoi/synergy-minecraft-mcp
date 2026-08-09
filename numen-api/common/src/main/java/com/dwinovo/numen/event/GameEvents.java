@@ -35,6 +35,8 @@ public final class GameEvents {
         AIR_LOW("air_low"),
         /** 受到伤害(HP 下降 ≥1 心)。 */
         DAMAGED("damaged"),
+        /** Embodied combat controller changed target, tactic, or engagement state. */
+        COMBAT("combat"),
         /** 导航停滞(长时间无实质进展)。 */
         NAV_STALLED("nav_stalled"),
         /** 坠落 ≥3 格。 */

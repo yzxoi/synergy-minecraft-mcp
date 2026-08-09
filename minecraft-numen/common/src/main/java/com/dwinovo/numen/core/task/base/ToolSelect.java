@@ -69,6 +69,15 @@ public final class ToolSelect {
         }
     }
 
+    /** Whether the body carries any item with a positive melee attack bonus. */
+    public static boolean hasMeleeWeapon(NumenPlayer p) {
+        Inventory inv = p.getInventory();
+        for (int i = 0; i < inv.getContainerSize(); i++) {
+            if (weaponDamage(inv.getItem(i)) > 0.0) return true;
+        }
+        return false;
+    }
+
     /**
      * The flat main-hand attack damage an item grants. A block or food scores 0,
      * so it is never chosen over a real weapon.

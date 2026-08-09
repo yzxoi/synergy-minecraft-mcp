@@ -41,6 +41,8 @@ import net.minecraft.world.phys.Vec3;
  *
  * <p>GATED OFF by default via {@link SurvivalConfig}.
  */
+@Deprecated(forRemoval = true)
+@SuppressWarnings("removal")
 public final class MobDefenseChain implements TaskChain, com.dwinovo.numen.task.reflex.Reflex {
 
     /** How far to look for a threat, and the leash beyond which we abandon a chase. */
