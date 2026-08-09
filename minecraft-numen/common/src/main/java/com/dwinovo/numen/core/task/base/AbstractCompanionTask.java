@@ -194,8 +194,10 @@ public abstract class AbstractCompanionTask<R extends TaskRecord>
             data.put("failure_code", "timed_out");
             data.put("recoverable_by_replan", true);
         } else if (finalState == TaskState.CANCELLED) {
-            data.put("failure_code", "interrupted");
-            data.put("recoverable_by_replan", true);
+            FailureType cancellationType = failType == FailureType.UNKNOWN
+                    ? FailureType.INTERRUPTED : failType;
+            data.put("failure_code", cancellationType.name().toLowerCase(Locale.ROOT));
+            data.put("recoverable_by_replan", recoverableByReplan(cancellationType));
         }
         TaskResult result = switch (finalState) {
             case SUCCESS   -> TaskResult.ok(successMessage(), data);
@@ -215,8 +217,10 @@ public abstract class AbstractCompanionTask<R extends TaskRecord>
             result = result.withObservability(ErrorCode.TIMEOUT.code(), true,
                     g.nextSteps(), null);
         } else if (finalState == TaskState.CANCELLED) {
-            FailureGuidance.Guidance g = FailureGuidance.forType(FailureType.INTERRUPTED);
-            result = result.withObservability(ErrorCode.CANCELLED.code(), false,
+            FailureType cancellationType = failType == FailureType.UNKNOWN
+                    ? FailureType.INTERRUPTED : failType;
+            FailureGuidance.Guidance g = FailureGuidance.forType(cancellationType);
+            result = result.withObservability(g.errorCode().code(), g.retryable(),
                     g.nextSteps(), null);
         }
         return result.withObservability(null, null, null,
@@ -297,6 +301,20 @@ public abstract class AbstractCompanionTask<R extends TaskRecord>
     }
 
     /**
+     * Park a diagnosed cancellation. Unlike {@link #fail}, the task result keeps
+     * {@code interrupted=true}; the supplied type only refines its machine-readable cause.
+     */
+    protected void cancel(String why, FailureType t) {
+        com.dwinovo.numen.core.Constants.LOG.info("[numen-task] {} CANCELLED({}) {}",
+                getClass().getSimpleName(), t, why);
+        this.doneReason = why;
+        this.failType = t;
+        this.pendingTerminal = TaskState.CANCELLED;
+        reportActivity("stopping", why, Map.of(
+                "failure_code", t.name().toLowerCase(Locale.ROOT)));
+    }
+
+    /**
      * Park a terminal SUCCESS — the mirror of {@link #fail} for one-shot tasks whose
      * whole job happens in {@link #onStart()} (drop, equip): {@link #tick()} surfaces
      * it, and {@link #start()} stamps it on the record for same-tick finalization.
@@ -333,7 +351,7 @@ public abstract class AbstractCompanionTask<R extends TaskRecord>
     private static boolean recoverableByReplan(FailureType type) {
         return switch (type) {
             case OCCLUDED, BOXED_IN, NO_PATH, OUT_OF_REACH, STANCE_DUD, HAZARD,
-                    TARGET_LOST, MINED_OUT, TIMED_OUT, INTERRUPTED -> true;
+                    TARGET_LOST, MINED_OUT, LOW_HEALTH, TIMED_OUT, INTERRUPTED -> true;
             default -> false;
         };
     }

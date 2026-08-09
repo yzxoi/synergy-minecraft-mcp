@@ -83,6 +83,8 @@ public final class FailureGuidance {
                 List.of("Widen the search radius or scan a different area; if none remains, stop and choose another plan.")));
         table.put(FailureType.ENTITY_BLOCKED, new Guidance(ErrorCode.WORLD_STATE, false,
                 List.of("Wait for the entity to move, lure it away, or pick another target cell.")));
+        table.put(FailureType.LOW_HEALTH, new Guidance(ErrorCode.LOW_HEALTH, true,
+                List.of("Recover health above the combat flee_health threshold, verify nearby threats, then issue a fresh combat task if still needed.")));
 
         // ---- lifecycle terminal states ----
         table.put(FailureType.INTERRUPTED, new Guidance(ErrorCode.CANCELLED, false,

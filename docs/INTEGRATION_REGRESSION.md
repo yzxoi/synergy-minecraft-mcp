@@ -75,13 +75,27 @@ pwsh -File .\scripts\Invoke-NumenIntegrationCheck.ps1 `
 5. 工具结果带 `structuredContent`（机器可读 JSON）与 `content[0].text`（英文可读文本）；查询类工具带 `readOnlyHint`/`idempotentHint`，`delete_companion` 带 `destructiveHint`；
 6. 落水场景端到端：把同伴放进水里，`get_events` 出现 `entered_water`，`task_status` 快照 `situation.in_water=true`，模型一个调用周期内可反应。
 
+## 3.2 Phase 3 具身战斗闭环
+
+在封闭测试场地准备盾牌、近战武器和食物，先用 `scan_nearby_entities` 取得运行时 `entity_id`，再按以下顺序验证。此阶段只覆盖确定性控制，不启用或训练 RL 策略。
+
+1. 调用 `combat(entity_ids=[...], stance="defensive", max_range=12, flee_health=8)`，保存返回的 `task_id`；确认自主 `TacticalCombatChain` 在显式战斗任务存活期间保持 dormant，身体始终只有一个控制者；
+2. 轮询 `task_status(task_id)`，同时读取 `combat_status`；后者应报告 `source`、`stance`、当前 `tactic`/target、health、有限容量威胁黑板与已触发的 `safety_filters`；
+3. 生成两个不同距离/伤害来源的敌对实体，确认控制器按 `observe → blackboard → decide → shield → act` 循环切换追击、侧移、攻击、拉扯或撤退，且相同世界状态的目标选择稳定；
+4. 击杀一个目标并让另一个离开 `max_range`，终态结果应区分 `defeated`、`lost` 与 `unreachable`，随后再次感知世界确认实体状态；
+5. 启动时生命值不高于 `flee_health`：任务必须 `failed`，`code=low_health` 且可重试；运行中降到阈值：任务必须 `cancelled`，`interrupted=true`，`failure_code=low_health`；
+6. 读取 `get_events`，确认战术/目标变更产生 `combat` 事件；死亡或移除同伴后，`combat_status` 不得泄漏旧 UUID 的活动快照。
+7. 把授权目标放在 2–3 格内但用实心墙完全遮挡；控制器不得把“导航目标在脚下”当成可攻击到达，必须在有限次重规划后标记不可达并释放身体。
+
+通过标准：优先级保持 `MLG(10) > breath(6) > combat(5) > food-regen(4) > food-hunger(3) > unstuck(2) > llm(0)`；战斗结束/中断后导航和输入被释放；不可达目标与控制器失败均有有界冷却，不得无限占用身体。
+
 ## 4. 生存行为抢占回归
 
 在安全测试世界生成一个不会立即致死的威胁，然后分别验证：
 
-1. 没有外部任务时，`MobDefenseChain` 可以接管身体；
-2. 显式 `goto`/`build` 运行期间，非致命 survival chain 不得静默冻结外部任务；
-3. `task_status` 能显示当前链、优先级和外部任务是否仍在运行；
+1. 没有外部任务时，`TacticalCombatChain` 可以接管身体，且沿用持久化 reflex id `mob_defense`；
+2. 显式 `goto`/`build` 运行期间，非致命 survival chain 不得静默冻结外部任务；显式 `combat` 运行时自主战斗链必须 dormant；
+3. `task_status` 能显示当前链、优先级和外部任务是否仍在运行；`combat_status` 能解释当前战术选择；
 4. 任务终态后，生存链可以恢复。
 
 ## 5. 通过标准

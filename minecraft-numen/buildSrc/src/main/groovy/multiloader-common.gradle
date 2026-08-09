@@ -65,8 +65,9 @@ repositories {
 
 // numen-api is consumed as a SNAPSHOT during co-development. Gradle caches
 // changing modules for 24h by default; drop that to 0 so a freshly republished
-// numen-api is re-resolved (and Loom re-remaps it) on the very next build —
-// no more stale-jar surprises when iterating on the engine.
+// artifact is re-resolved immediately. Fabric Loom can still retain its separately
+// remapped copy: after changing API symbols, run `./gradlew clean` before the core
+// verification build so loader compilation cannot see stale bytecode.
 configurations.all {
     resolutionStrategy.cacheChangingModulesFor 0, 'seconds'
 }

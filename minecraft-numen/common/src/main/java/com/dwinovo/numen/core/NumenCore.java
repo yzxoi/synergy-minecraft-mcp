@@ -23,6 +23,8 @@ import com.dwinovo.numen.core.task.EatItemTaskRecord;
 import com.dwinovo.numen.core.task.EquipCompanionTask;
 import com.dwinovo.numen.core.task.EquipTaskRecord;
 import com.dwinovo.numen.core.task.FishCompanionTask;
+import com.dwinovo.numen.core.task.CombatCompanionTask;
+import com.dwinovo.numen.core.task.CombatTaskRecord;
 import com.dwinovo.numen.core.task.FishTaskRecord;
 import com.dwinovo.numen.core.task.MeleeAttackCompanionTask;
 import com.dwinovo.numen.core.task.MeleeAttackTaskRecord;
@@ -71,6 +73,10 @@ public final class NumenCore {
         registerTaskRunners();
         registerChains();
         registerReflexes();
+        CompanionLifecycle.onDeath(body ->
+                com.dwinovo.numen.core.task.combat.CombatStatusRegistry.clear(body.getUUID()));
+        CompanionLifecycle.onRemove(body ->
+                com.dwinovo.numen.core.task.combat.CombatStatusRegistry.clear(body.getUUID()));
         // Enable the autonomous survival chains (auto-eat / mob-defense / unstuck /
         // MLG). SurvivalConfig's own default is OFF — the safe state a bare library
         // build ships with — and the pack turns it on here, explicitly, at init.
@@ -87,7 +93,7 @@ public final class NumenCore {
         com.dwinovo.numen.task.BrainChains.register(10,
                 bodyLog -> new com.dwinovo.numen.core.task.chain.UnstuckChain());
         com.dwinovo.numen.task.BrainChains.register(20,
-                com.dwinovo.numen.core.task.chain.MobDefenseChain::new);
+                com.dwinovo.numen.core.task.chain.TacticalCombatChain::new);
         com.dwinovo.numen.task.BrainChains.register(30,
                 com.dwinovo.numen.core.task.chain.FoodChain::new);
         com.dwinovo.numen.task.BrainChains.register(40,
@@ -113,6 +119,8 @@ public final class NumenCore {
         ToolRegistry.register(new com.dwinovo.numen.core.tools.MoveToTool());
         ToolRegistry.register(new com.dwinovo.numen.core.tools.MeleeAttackTool());
         ToolRegistry.register(new com.dwinovo.numen.core.tools.RangedAttackTool());
+        ToolRegistry.register(new com.dwinovo.numen.core.tools.CombatTool());
+        ToolRegistry.register(new com.dwinovo.numen.core.tools.CombatStatusTool());
         ToolRegistry.register(new com.dwinovo.numen.core.tools.LocateStructureTool());
         ToolRegistry.register(new com.dwinovo.numen.core.tools.LocateBiomeTool());
         ToolRegistry.register(new com.dwinovo.numen.core.tools.CollectItemsTool());
@@ -154,6 +162,7 @@ public final class NumenCore {
         CompanionTaskFactory.register(DropItemsTaskRecord.class, (p, r) -> new DropCompanionTask(p, r));
         CompanionTaskFactory.register(EatItemTaskRecord.class, (p, r) -> new EatCompanionTask(p, r));
         CompanionTaskFactory.register(MeleeAttackTaskRecord.class, (p, r) -> new MeleeAttackCompanionTask(p, r));
+        CompanionTaskFactory.register(CombatTaskRecord.class, (p, r) -> new CombatCompanionTask(p, r));
         CompanionTaskFactory.register(RangedAttackTaskRecord.class, (p, r) -> new RangedAttackCompanionTask(p, r));
         CompanionTaskFactory.register(CollectItemsTaskRecord.class, (p, r) -> new CollectItemsTaskGoal(p, r));
         CompanionTaskFactory.register(FishTaskRecord.class, (p, r) -> new FishCompanionTask(p, r));

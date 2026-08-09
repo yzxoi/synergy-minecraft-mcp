@@ -60,20 +60,29 @@ public final class SurvivalDecisions {
         return DORMANT;
     }
 
-    /** How the threat-response chain reacts to a present threat. */
+    /**
+     * How the legacy threat-response chain reacts to a present threat.
+     * @deprecated Replaced by the multi-threat {@code TacticalDecisions} policy.
+     */
+    @Deprecated(forRemoval = true)
     public enum ThreatResponse { NONE, FIGHT, FLEE }
 
     /**
-     * Fight-vs-flee: with a threat present, flee when too hurt to trade blows or
-     * when unarmed (survival never auto-acquires a weapon); otherwise fight back.
+     * Legacy fight-vs-flee decision retained only for {@code MobDefenseChain}.
+     * @deprecated Replaced by the multi-threat {@code TacticalDecisions} policy.
      */
+    @Deprecated(forRemoval = true)
     public static ThreatResponse decideThreatResponse(boolean threatPresent, float health, boolean armed) {
         if (!threatPresent) return ThreatResponse.NONE;
         if (health <= FLEE_HEALTH) return ThreatResponse.FLEE;
         return armed ? ThreatResponse.FIGHT : ThreatResponse.FLEE;
     }
 
-    /** How much the mob-defense chain wants the body: a fixed spike while a threat is present. */
+    /**
+     * Legacy fixed mob-defense priority.
+     * @deprecated Only retained until {@code MobDefenseChain} can be deleted.
+     */
+    @Deprecated(forRemoval = true)
     public static float mobDefensePriority(boolean threatPresent) {
         return threatPresent ? MOB_DEFENSE_PRIORITY : DORMANT;
     }

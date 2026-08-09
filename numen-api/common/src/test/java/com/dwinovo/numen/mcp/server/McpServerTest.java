@@ -51,6 +51,7 @@ class McpServerTest {
         assertEquals(PROTOCOL_VERSION, result.get("protocolVersion").getAsString());
         assertTrue(result.getAsJsonObject("capabilities").has("tools"));
         assertEquals("numen-mcp", result.getAsJsonObject("serverInfo").get("name").getAsString());
+        assertEquals("0.2.0", result.getAsJsonObject("serverInfo").get("version").getAsString());
         assertFalse(result.get("instructions").getAsString().isBlank());
     }
 

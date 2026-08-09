@@ -370,6 +370,20 @@ net.minecraft.world.entity.vehicle.Boat            → vehicle.boat.Boat        
 
 (残留清点:本档 api 清 14 个旧文件/贴图、core 清 51 个旧 0.0.x 引擎类——与 1.21.10 档同集合。)
 
+### Phase 3 具身战斗移植面
+
+该阶段没有引入 RL；决策内核保持纯 Java、确定性排序（score 后按 entity id 打破平局）。跨版本移植时，优先编译检查以下世界绑定点：
+
+```java
+Monster.getTarget()                         // 防御姿态授权：只响应正在攻击同伴的实体
+BuiltInRegistries.ENTITY_TYPE.getKey(type) // 威胁快照中的实体类型 id
+Interaction.attackEntity(...).tick()       // 原生攻击冷却与命中
+PlayerNav.followEntity(...)                 // 追击
+PlayerNav.toGoal(..., NavGoal.runAway(...))// 撤退
+```
+
+公共 wire 契约必须同步保留：`ErrorCode.LOW_HEALTH("low_health")`、`GameEvents.Kind.COMBAT("combat")`、异步工具 `combat`、只读工具 `combat_status`。core 注册顺序与持久化 reflex id 也属于兼容面：战斗链优先级固定为 5，`id()` 继续返回 `mob_defense`。
+
 ## 1.21.11 → 26.1.2
 _待移植时填写_
 

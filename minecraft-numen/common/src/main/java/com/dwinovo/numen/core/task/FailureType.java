@@ -59,6 +59,8 @@ public enum FailureType {
     MINED_OUT,
     /** A fluid/lava/void hazard blocks the safe execution. In-ladder: route around, else give up. */
     HAZARD,
+    /** Health crossed a caller-defined combat safety threshold. Recover, then replan. */
+    LOW_HEALTH,
     /** Pre-empted or cancelled (owner stop, death). Not a real failure — terminal housekeeping. */
     INTERRUPTED,
     /** Ran out of deadline budget. */

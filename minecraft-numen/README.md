@@ -93,11 +93,11 @@ Give it an intent and it breaks it into dozens of actions and runs them end to e
 
 - ⛏️ **Real work** — mine, chop, gather, build, place and break with precision, hand-craft by recipe, smelt in furnaces, sort loot into chests.
 - 🧭 **Real movement** — a pathfinder that takes its cues from Baritone, rewritten for the companion: it bridges gaps, pillars up, tunnels through, staircases down, and swims. *"Go to that coordinate"* is meant literally — even if that means digging all the way to diamond level.
-- ⚔️ **Real combat** — native player melee and bow: real cooldowns, real crits; it eats when hurt and swims to shore before it drowns.
+- ⚔️ **Real combat** — an embodied tactical controller observes multiple threats, chooses chase, strafe, attack, kite, or flee deterministically, and applies health and hazard safety before acting through native player combat.
 - 🔭 **Real perception** — scan blocks, scan entities, check status, look up recipes, locate any structure or biome, even x-ray what's inside a machine without opening its GUI.
 - 🧠 **Real memory** — conversations persist across saves and auto-compact when they grow long; it remembers the crafting tables, furnaces, and chests it has used, and walks back to them instead of building new ones. Death is recoverable: vanilla death drops as usual, then it respawns by your side after a moment.
 
-Thirty-four native tools make up its hands and eyes *right now*. And its abilities keep growing — through the very two instruments of [Reach](#reach):
+Thirty-six native tools make up its hands and eyes *right now*. And its abilities keep growing — through the very two instruments of [Reach](#reach):
 
 - 📖 **Write a Skill to coach it.** Markdown workflows under `config/numen/skills/`, loaded only when relevant to keep the prompt lean. It ships with a full set of guides for the whole vanilla end-game (the Nether, blaze rods, ender pearls, the stronghold, the dragon fight…). Edit one, or write your own, to teach it your base's rules — or a whole new mod's playbook.
 - 🔌 **Plug in an MCP to extend it.** A compatibility module wires a mod's inner world, structured, into its senses and hands — so the boundary of what it *can do* grows together with the entire modded ecosystem.

@@ -605,7 +605,7 @@ Skills 只指导决策，不新增底层能力。如果工作流要求读取某�
 
 ## 10. 当前原生工具清单
 
-当前注册 34 个原生工具。外接 MCP 默认隐藏其中 `todowrite`、`load_skill`，但会额外增加 3 个同伴管理工具。
+当前注册 36 个原生工具。外接 MCP 默认隐藏其中 `todowrite`、`load_skill`，但会额外增加 3 个同伴管理工具。
 
 | 类别 | 工具 |
 | --- | --- |
@@ -613,7 +613,7 @@ Skills 只指导决策，不新增底层能力。如果工作流要求读取某�
 | 方块/实体感知 | `scan_blocks`、`scan_nearby_entities`、`inspect_block`、`inspect_block_storage` |
 | 导航/定位 | `goto`、`locate_structure`、`locate_biome` |
 | 采集/生存 | `mine`、`collect_items`、`fish`、`eat_item`、`equip_item` |
-| 战斗/交互 | `melee_attack`、`ranged_attack`、`interact_at`、`interact_entity` |
+| 战斗/交互 | `combat`、`combat_status`、`melee_attack`、`ranged_attack`、`interact_at`、`interact_entity` |
 | 背包/容器 | `drop_items`、`take_items`、`transfer`、`inspect_gui`、`close_gui` |
 | 配方/合成 | `lookup_recipe`、`craft` |
 | 建造 | `build`、`blueprint`、`blueprint_read` |
@@ -639,6 +639,12 @@ Skills 只指导决策，不新增底层能力。如果工作流要求读取某�
 
 // 获取 16 个新增加的原木物品
 {"companion":"Alice","block_ids":["minecraft:oak_log"],"count":16}
+
+// 启动一个有边界、可观测的战术战斗任务；entity_ids 来自实体扫描
+{"companion":"Alice","entity_ids":[42,57],"stance":"defensive","max_range":12,"flee_health":8}
+
+// 读取当前自主或显式战斗控制器的战术、威胁黑板和安全过滤状态
+{"companion":"Alice"}
 ```
 
 `goto` 有四种互斥意图：
