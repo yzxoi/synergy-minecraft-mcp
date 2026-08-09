@@ -32,7 +32,8 @@ public final class Companions {
 
     /**
      * Summon the owner's companion called {@code name}. IDEMPOTENT per (owner, name): if one already
-     * exists it is reused — already live → returned as-is; dormant → brought back. Only a name with no
+     * exists it is reused — already live → returned as-is; dormant → brought back; awaiting timed
+     * respawn after death → returns {@code null} without replacing its stable UUID. Only a name with no
      * existing companion mints a fresh one. (The old "fresh random UUID every summon" minted same-name
      * duplicates that all respawned on login — that's the duplicate-companion bug.)
      */
@@ -49,9 +50,12 @@ public final class Companions {
         CompanionRegistry reg = CompanionRegistry.get(server);
         UUID existing = findByOwnerName(server, ownerUuid, name);
         if (existing != null) {
+            CompanionRegistry.Entry entry = reg.find(existing);
             if (skin != null) {
-                CompanionRegistry.Entry e = reg.find(existing);
-                if (e != null) reg.put(existing, e.withSkin(skin.value(), skin.signature()));
+                if (entry != null) {
+                    entry = entry.withSkin(skin.value(), skin.signature());
+                    reg.put(existing, entry);
+                }
                 // 换肤必须重建身体才看得见(GameProfile 只在构造时注入):活体先落盘
                 // 休眠,紧接着的 respawn 立即以带新皮肤的档案重建,位置物品全保留。
                 NumenPlayer live = NumenPlayer.findByUuid(server, existing);
@@ -59,6 +63,10 @@ public final class Companions {
                     CompanionFactory.despawn(server, live);
                 }
             }
+            // A dead companion is awaiting its timed owner-side respawn, not dormant. Re-summoning
+            // during that window must preserve the registry entry and stable UUID rather than minting
+            // a replacement body that the death timer will later overwrite.
+            if (awaitingRespawn(entry)) return null;
             NumenPlayer body = respawn(server, existing);
             if (body != null) return body;
             reg.remove(existing);   // stale entry (no .dat) — replace it
@@ -87,17 +95,27 @@ public final class Companions {
     /**
      * Bring a dormant companion back from its catalog entry + {@code .dat}
      * (position/inventory restored from disk). Returns the already-live body if
-     * it is spawned, or {@code null} if it is unknown to the registry.
+     * it is spawned, or {@code null} if it is unknown or awaiting timed respawn
+     * after death.
      */
     public static NumenPlayer respawn(MinecraftServer server, UUID companionUuid) {
         NumenPlayer live = NumenPlayer.findByUuid(server, companionUuid);
         if (live != null) return live;
         CompanionRegistry.Entry entry = CompanionRegistry.get(server).find(companionUuid);
-        if (entry == null) return null;
+        if (entry == null || awaitingRespawn(entry)) return null;
         ServerLevel level = server.getLevel(entry.dimension());
         if (level == null) level = server.overworld();
         // pos=null: keep the position restored from the .dat.
         return CompanionFactory.spawn(server, companionUuid, entry.name(), entry.owner(), level, null);
+    }
+
+    static boolean awaitingRespawn(CompanionRegistry.Entry entry) {
+        return entry != null && entry.diedAt() > 0L;
+    }
+
+    /** Whether this registered companion is dead and waiting for its timed owner-side respawn. */
+    public static boolean awaitingRespawn(MinecraftServer server, UUID companionUuid) {
+        return awaitingRespawn(CompanionRegistry.get(server).find(companionUuid));
     }
 
     /** When an owner logs in, bring back every companion of theirs. A companion that DIED while the owner
@@ -106,7 +124,7 @@ public final class Companions {
     public static void respawnAllOwnedBy(MinecraftServer server, UUID ownerUuid) {
         ServerPlayer owner = server.getPlayerList().getPlayer(ownerUuid);
         for (Map.Entry<UUID, CompanionRegistry.Entry> e : CompanionRegistry.get(server).ownedBy(ownerUuid)) {
-            if (e.getValue().diedAt() > 0L) {
+            if (awaitingRespawn(e.getValue())) {
                 if (owner != null) respawnDead(server, e.getKey(), e.getValue(), owner);
             } else {
                 respawn(server, e.getKey());
@@ -167,6 +185,11 @@ public final class Companions {
      *  a death loop until the owner happened to move. */
     private static boolean respawnDead(MinecraftServer server, UUID uuid, CompanionRegistry.Entry entry,
                                        ServerPlayer owner) {
+        // A dead entry must have exactly one authoritative body. The dormant-respawn path rejects
+        // dead entries, but clean up defensively in case another caller or an older world session
+        // produced a same-UUID body before the timer elapsed.
+        NumenPlayer existing = NumenPlayer.findByUuid(server, uuid);
+        if (existing != null) CompanionFactory.despawn(server, existing);
         ServerLevel level = (ServerLevel) owner.level();
         Vec3 pos = SafeSpawn.findNear(level, owner.position());
         if (pos == null && owner.onGround() && SafeSpawn.hasStandingRoom(level, owner.position())) {

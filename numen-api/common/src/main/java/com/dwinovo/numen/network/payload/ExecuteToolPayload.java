@@ -89,6 +89,13 @@ public record ExecuteToolPayload(UUID entityUuid,
         //       respawn it from the registry on a cold start) and run the tool
         //       through the CompanionTickDispatcher instead of the Mob GoalSelector.
         var server = player.level().getServer();
+        // The corpse remains in the player list until the deferred despawn runs. Check persistent
+        // lifecycle state before resolving any body so a tool cannot bind to that corpse or trigger
+        // the dormant-respawn fallback while the companion is awaiting timed respawn.
+        if (com.dwinovo.numen.entity.Companions.awaitingRespawn(server, p.entityUuid())) {
+            replyError(player, p, "companion is dead and regenerating; wait for it to respawn");
+            return;
+        }
         com.dwinovo.numen.entity.NumenPlayer companion =
                 com.dwinovo.numen.entity.NumenPlayer.findByUuid(server, p.entityUuid());
         if (companion == null) {
