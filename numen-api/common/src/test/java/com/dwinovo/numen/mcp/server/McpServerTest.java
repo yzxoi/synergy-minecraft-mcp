@@ -378,6 +378,95 @@ class McpServerTest {
     }
 
     @Test
+    void bodySituationIsMirroredIntoStructuredAndTextContent() {
+        JsonObject toolResult = new JsonObject();
+        toolResult.addProperty("success", true);
+        toolResult.addProperty("message", "ok");
+        JsonObject previous = new JsonObject();
+        previous.addProperty("hp", 7.0);
+        previous.addProperty("active_reflex", "mob_defense");
+        toolResult.add("situation", previous);
+
+        JsonObject envelope = new JsonObject();
+        JsonObject text = new JsonObject();
+        text.addProperty("type", "text");
+        text.addProperty("text", toolResult.toString());
+        JsonArray content = new JsonArray();
+        content.add(text);
+        envelope.add("content", content);
+        envelope.add("structuredContent", toolResult.deepCopy());
+
+        JsonObject decorated = McpServer.decorateResultWithSituation(envelope, Map.of(
+                "hp", 8.0,
+                "nearby_hostiles", 3,
+                "under_attack", true,
+                "active_reflex", "unknown"));
+
+        JsonObject structured = decorated.getAsJsonObject("structuredContent");
+        JsonObject situation = structured.getAsJsonObject("situation");
+        assertEquals(8.0, situation.get("hp").getAsDouble());
+        assertEquals(3, situation.get("nearby_hostiles").getAsInt());
+        assertTrue(situation.get("under_attack").getAsBoolean());
+        assertEquals("mob_defense", situation.get("active_reflex").getAsString());
+
+        JsonObject textResult = JsonParser.parseString(
+                decorated.getAsJsonArray("content").get(0).getAsJsonObject().get("text").getAsString())
+                .getAsJsonObject();
+        assertEquals(structured, textResult);
+    }
+
+    @Test
+    void missingSituationLeavesToolResultUnchanged() {
+        JsonObject envelope = new JsonObject();
+        envelope.addProperty("isError", false);
+
+        JsonObject decorated = McpServer.decorateResultWithSituation(envelope, Map.of());
+
+        assertEquals(envelope, decorated);
+    }
+
+    @Test
+    void contentOnlyEnvelopeIsUnchangedWhenSituationExists() {
+        JsonObject envelope = new JsonObject();
+        JsonObject text = new JsonObject();
+        text.addProperty("type", "text");
+        text.addProperty("text", "legacy result");
+        JsonArray content = new JsonArray();
+        content.add(text);
+        envelope.add("content", content);
+
+        JsonObject decorated = McpServer.decorateResultWithSituation(envelope, Map.of("hp", 8.0));
+
+        assertEquals(envelope, decorated);
+    }
+
+    @Test
+    void nonJsonTextAppendsSituationAfterDecoratingStructuredContent() {
+        JsonObject envelope = new JsonObject();
+        JsonObject structured = new JsonObject();
+        structured.addProperty("success", false);
+        structured.addProperty("message", "plain failure");
+        envelope.add("structuredContent", structured);
+        JsonObject text = new JsonObject();
+        text.addProperty("type", "text");
+        text.addProperty("text", "plain failure");
+        JsonArray content = new JsonArray();
+        content.add(text);
+        envelope.add("content", content);
+
+        JsonObject decorated = McpServer.decorateResultWithSituation(envelope,
+                Map.of("hp", 8.0, "under_attack", true));
+
+        JsonObject situation = decorated.getAsJsonObject("structuredContent")
+                .getAsJsonObject("situation");
+        String decoratedText = decorated.getAsJsonArray("content").get(0)
+                .getAsJsonObject().get("text").getAsString();
+        assertEquals(8.0, situation.get("hp").getAsDouble());
+        assertTrue(situation.get("under_attack").getAsBoolean());
+        assertEquals("plain failure\n\nsituation: " + situation, decoratedText);
+    }
+
+    @Test
     void eventsPageNextIdResumesAfterLastReturnedEventWhenTruncated() {
         com.dwinovo.numen.event.EventRingBuffer ring = new com.dwinovo.numen.event.EventRingBuffer(50);
         for (int i = 1; i <= 5; i++) {

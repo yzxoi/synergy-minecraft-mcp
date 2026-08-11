@@ -6,9 +6,11 @@ import com.dwinovo.numen.agent.tool.ToolCall;
 import com.dwinovo.numen.agent.tool.ToolRegistry;
 import com.dwinovo.numen.client.agent.ClientNumenLookup;
 import com.dwinovo.numen.client.agent.NumenRoster;
+import com.dwinovo.numen.entity.NumenPlayer;
 import com.dwinovo.numen.network.payload.DismissRequestPayload;
 import com.dwinovo.numen.network.payload.SummonRequestPayload;
 import com.dwinovo.numen.platform.Services;
+import com.dwinovo.numen.task.BodySituation;
 import com.dwinovo.numen.task.TaskRecord;
 import com.dwinovo.numen.task.TaskResult;
 import net.minecraft.client.Minecraft;
@@ -16,6 +18,7 @@ import net.minecraft.client.player.AbstractClientPlayer;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicLong;
@@ -89,6 +92,56 @@ public final class NumenActuator {
             f.complete(out);
         });
         return f;
+    }
+
+    /**
+     * Capture the latest body situation for an external driver. In singleplayer,
+     * read the authoritative integrated-server body; on a remote server, fall back
+     * to the client-visible entity mirror. Either path is read-only and never sends
+     * another network request.
+     */
+    public static CompletableFuture<Map<String, Object>> situation(UUID companion) {
+        CompletableFuture<Map<String, Object>> f = new CompletableFuture<>();
+        if (companion == null) {
+            f.complete(Map.of());
+            return f;
+        }
+        Minecraft.getInstance().execute(() -> {
+            Minecraft client = Minecraft.getInstance();
+            var integratedServer = client.getSingleplayerServer();
+            if (integratedServer != null) {
+                integratedServer.execute(() -> {
+                    try {
+                        var body = NumenPlayer.findByUuid(integratedServer, companion);
+                        if (body != null) {
+                            f.complete(BodySituation.capture(body));
+                            return;
+                        }
+                    } catch (RuntimeException ignored) {
+                        // Fall through to the client mirror below.
+                    }
+                    client.execute(() -> completeClientSituation(f, companion));
+                });
+                return;
+            }
+            completeClientSituation(f, companion);
+        });
+        return f;
+    }
+
+    /**
+     * Client-main-thread fallback for multiplayer where the server body is not locally accessible.
+     * Server-only details such as active reflexes and five-second attacker memory may degrade to
+     * {@code unknown} or shorter-lived client-visible signals.
+     */
+    private static void completeClientSituation(CompletableFuture<Map<String, Object>> future,
+                                                UUID companion) {
+        try {
+            AbstractClientPlayer body = ClientNumenLookup.resolve(companion);
+            future.complete(body == null ? Map.of() : BodySituation.capture(body));
+        } catch (RuntimeException ignored) {
+            future.complete(Map.of());
+        }
     }
 
     /**

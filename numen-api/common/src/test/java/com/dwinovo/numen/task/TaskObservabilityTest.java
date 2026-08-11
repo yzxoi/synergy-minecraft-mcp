@@ -71,6 +71,19 @@ class TaskObservabilityTest {
     }
 
     @Test
+    void underAttackKeepsAOneHundredTickDamageMemory() {
+        assertTrue(BodySituation.underAttack(200, 100, true, 0, 0));
+        assertFalse(BodySituation.underAttack(201, 100, true, 0, 0));
+        assertFalse(BodySituation.underAttack(200, 100, false, 0, 0));
+    }
+
+    @Test
+    void activeThreatSignalsOverrideExpiredDamageMemory() {
+        assertTrue(BodySituation.underAttack(500, 100, true, 1, 0));
+        assertTrue(BodySituation.underAttack(500, 100, true, 0, 1));
+    }
+
+    @Test
     void completedTaskRemainsAddressableAfterOutboxDrain() {
         TaskQueue q = new TaskQueue();
         TestRecord r = new TestRecord(1_000);

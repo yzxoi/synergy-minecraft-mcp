@@ -70,6 +70,9 @@ public final class McpServer {
     private static final Set<String> EXTERNAL_ASYNC_TOOLS = Set.of(
             "goto", "mine", "build", "blueprint", "collect_items", "fish",
             "melee_attack", "ranged_attack", "combat");
+    /** Tools that manage companion lifecycle rather than report on an existing body. */
+    private static final Set<String> MANAGEMENT_TOOLS = Set.of(
+            "list_companions", "create_companion", "delete_companion");
 
     /**
      * MCP is a request/response transport: external callers do not receive the
@@ -103,9 +106,10 @@ public final class McpServer {
             scan_blocks / scan_nearby_entities; (3) act with goto / mine / build / craft / equip_item / fish / \
             combat / melee_attack / ranged_attack / interact_at / etc. Long actions return a task_id at once — \
             poll task_status with that task_id until \
-            its state is terminal, inspect its structured result, then perceive to confirm. Every action \
-            tool takes a 'companion' argument (name or id), so each \
-            call targets one companion; just drive it, there is no take-control step.
+            its state is terminal, inspect its structured result, then perceive to confirm. Every body-bound result \
+            includes a fresh `situation` snapshot with hp, max_hp, hunger, x/y/z, nearby_hostiles, targeting_hostiles, \
+            under_attack, locomotion, and active_reflex. Every action tool takes a 'companion' argument (name or id), \
+            so each call targets one companion; just drive it, there is no take-control step.
 
             The canonical action names, parameters, and JSON Schemas are always the live results of \
             tools/list. Treat this text as orientation only: do not hard-code a name or argument from \
@@ -117,7 +121,7 @@ public final class McpServer {
             parallel. Modded blocks, items, and GUIs (Create, AE2, Mekanism) work natively.""";
 
     private final McpConfig config;
-    private final Gson gson = new Gson();
+    private static final Gson GSON = new Gson();
     private HttpServer http;
     private ExecutorService executor;
 
@@ -249,7 +253,7 @@ public final class McpServer {
     private void writeSseFrame(OutputStream os, JsonElement frame) throws IOException {
         os.write("event: message\n".getBytes(StandardCharsets.UTF_8));
         os.write("data: ".getBytes(StandardCharsets.UTF_8));
-        os.write(gson.toJson(frame).getBytes(StandardCharsets.UTF_8));
+        os.write(GSON.toJson(frame).getBytes(StandardCharsets.UTF_8));
         os.write("\n\n".getBytes(StandardCharsets.UTF_8));
     }
 
@@ -329,7 +333,7 @@ public final class McpServer {
     }
 
     private void respondJson(HttpExchange ex, int status, JsonElement json) throws IOException {
-        byte[] bytes = gson.toJson(json).getBytes(StandardCharsets.UTF_8);
+        byte[] bytes = GSON.toJson(json).getBytes(StandardCharsets.UTF_8);
         ex.getResponseHeaders().add("Content-Type", "application/json");
         ex.sendResponseHeaders(status, bytes.length);
         try (OutputStream os = ex.getResponseBody()) {
@@ -661,7 +665,7 @@ public final class McpServer {
         props.add("code", prop("string", "Machine-readable error domain on failure (validation/not_found/busy/world_state/low_health/network/timeout/unsupported/cancelled/internal)."));
         props.add("retryable", prop("boolean", "Whether retrying the same call as-is is permitted."));
         props.add("next_steps", prop("array", "Suggested next actions for the model."));
-        props.add("situation", prop("object", "Body situation snapshot: in_water/eye_underwater/air/air_pct/on_ground/hp/hunger/in_lava/dimension/x/y/z/locomotion/active_reflex."));
+        props.add("situation", prop("object", "Fresh body snapshot on body-bound results: hp/max_hp/hunger/air/x/y/z/locomotion/active_reflex plus nearby_hostiles, targeting_hostiles, and under_attack."));
         schema.add("properties", props);
         JsonArray required = new JsonArray();
         required.add("success");
@@ -712,7 +716,7 @@ public final class McpServer {
     private JsonObject withCompanion(java.util.Map<String, Object> parameterSchema) {
         JsonObject schema = parameterSchema == null
                 ? new JsonObject()
-                : gson.toJsonTree(parameterSchema).getAsJsonObject();
+                : GSON.toJsonTree(parameterSchema).getAsJsonObject();
         schema.addProperty("type", "object");
         JsonObject props = schema.has("properties") && schema.get("properties").isJsonObject()
                 ? schema.getAsJsonObject("properties") : new JsonObject();
@@ -745,6 +749,19 @@ public final class McpServer {
                 ? params.getAsJsonObject("arguments") : new JsonObject();
 
         JsonObject out = dispatchToolCall(name, args);
+        if (!MANAGEMENT_TOOLS.contains(name)) {
+            try {
+                UUID target = resolveCompanion(args);
+                if (target != null) {
+                    Map<String, Object> situation = NumenActuator.situation(target)
+                            .get(CONTROL_TIMEOUT_SECONDS, TimeUnit.SECONDS);
+                    out = decorateResultWithSituation(out, situation);
+                }
+            } catch (Exception captureError) {
+                Constants.LOG.debug("[numen-mcp] situation capture skipped for {}: {}",
+                        name, captureError.toString());
+            }
+        }
         McpMode.instance().record(name, argsSummary(args), textOf(out), isError(out));
         return out;
     }
@@ -849,7 +866,7 @@ public final class McpServer {
             java.util.List<Map<String, Object>> all = ring.since(sinceId);
             int shown = Math.min(all.size(), limit);
             for (int i = 0; i < shown; i++) {
-                events.add(gson.toJsonTree(all.get(i)));
+                events.add(GSON.toJsonTree(all.get(i)));
             }
             nextId = shown == 0 ? ring.lastSeq()
                     : ((Number) all.get(shown - 1).get("seq")).longValue();
@@ -1167,6 +1184,60 @@ public final class McpServer {
             result.add("structuredContent", structured);
         }
         return result;
+    }
+
+    /**
+     * Merge a return-time body snapshot into both MCP result channels. Fresh values
+     * replace task-time values, except that an unavailable client-only value marked
+     * {@code unknown} never erases a precise server-side value already in the result.
+     */
+    static JsonObject decorateResultWithSituation(JsonObject envelope,
+                                                    Map<String, Object> situation) {
+        if (envelope == null || situation == null || situation.isEmpty()
+                || !envelope.has("structuredContent")
+                || !envelope.get("structuredContent").isJsonObject()) {
+            return envelope;
+        }
+        JsonObject decorated = envelope.deepCopy();
+        JsonObject structured = decorated.getAsJsonObject("structuredContent");
+        JsonObject merged = structured.has("situation")
+                && structured.get("situation").isJsonObject()
+                ? structured.getAsJsonObject("situation").deepCopy() : new JsonObject();
+        JsonObject fresh = GSON.toJsonTree(situation).getAsJsonObject();
+        for (Map.Entry<String, JsonElement> field : fresh.entrySet()) {
+            JsonElement value = field.getValue();
+            boolean unavailable = value.isJsonPrimitive()
+                    && value.getAsJsonPrimitive().isString()
+                    && "unknown".equals(value.getAsString());
+            if (!unavailable || !merged.has(field.getKey())) {
+                merged.add(field.getKey(), value.deepCopy());
+            }
+        }
+        structured.add("situation", merged.deepCopy());
+
+        if (decorated.has("content") && decorated.get("content").isJsonArray()) {
+            for (JsonElement itemElement : decorated.getAsJsonArray("content")) {
+                if (!itemElement.isJsonObject()) continue;
+                JsonObject item = itemElement.getAsJsonObject();
+                if (!item.has("type") || !"text".equals(item.get("type").getAsString())
+                        || !item.has("text")) continue;
+                String text = item.get("text").getAsString();
+                try {
+                    JsonElement parsed = JsonParser.parseString(text);
+                    if (parsed.isJsonObject()) {
+                        JsonObject textResult = parsed.getAsJsonObject();
+                        textResult.add("situation", merged.deepCopy());
+                        item.addProperty("text", textResult.toString());
+                    } else {
+                        item.addProperty("text", text + "\n\nsituation: " + merged);
+                    }
+                } catch (RuntimeException ignored) {
+                    item.addProperty("text", text + "\n\nsituation: " + merged);
+                }
+                break;
+            }
+        }
+        return decorated;
     }
 
     private JsonObject okResponse(JsonElement id, JsonObject result) {

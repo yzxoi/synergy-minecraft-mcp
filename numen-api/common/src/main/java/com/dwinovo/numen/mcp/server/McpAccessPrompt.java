@@ -79,9 +79,9 @@ final class McpAccessPrompt {
                 then inspect `data.state` and `data.result` and verify with perception. As an external \
                 driver you do NOT receive `task_finished` events, so polling is the only way to know \
                 the outcome. `task_stop` cancels.
-                - Every result also carries a `situation` block (in_water / air / on_ground / hp / \
-                hunger / in_lava / locomotion / active_reflex …) — read it on every poll so you notice \
-                the body fell in water or is running out of air before you keep issuing `goto`.
+                - Every body-bound result also carries a fresh `situation` block (hp / max_hp / hunger / air / \
+                x / y / z / nearby_hostiles / targeting_hostiles / under_attack / locomotion / active_reflex …). \
+                Read it on every response so you notice danger or environmental trouble before issuing the next action.
                 - `get_events` gives an incremental event stream (entered_water, air_low, damaged, \
                 fell, respawned, task_finished, body_log …) — call it with the last `next_id` to catch \
                 what happened while you were thinking.
