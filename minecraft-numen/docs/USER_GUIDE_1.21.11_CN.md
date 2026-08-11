@@ -263,10 +263,12 @@ Numen 不是把一句话直接翻译成一个巨大动作，而是“感知 → 
 | `situation` | 快照顶层也镜像一份处境快照，无需进 `result` 就能看到 |
 
 `situation` 字段：`in_water`、`eye_underwater`、`air`、`air_pct`、`on_ground`、
-`hp`、`hunger`、`in_lava`、`dimension`、`x/y/z`、`locomotion`（on_ground /
+`hp`、`max_hp`、`hunger`、`in_lava`、`dimension`、`x/y/z`、`locomotion`（on_ground /
 in_water / swimming / in_lava / elytra_flying / airborne）、`active_reflex`（当前
-调度链名，如 breath / unstuck，无则 `none`）。模型应在轮询结果时顺便读它，
-避免「身体已经掉进水里，大脑还在继续 goto」。
+调度链名，如 breath / unstuck，无则 `none`）、`nearby_hostiles`（16 格球形范围内敌对
+生物数）、`targeting_hostiles`（其中正在以该同伴为目标的数量）和 `under_attack`
+（正被敌对生物锁定、当前受伤，或最近 100 tick 内受过攻击）。模型应在每次身体绑定的
+MCP 响应里顺便读取它，避免「怪物已经贴脸，大脑还在继续 goto」。
 
 ### 5.2.1 事件通道 `get_events`
 
